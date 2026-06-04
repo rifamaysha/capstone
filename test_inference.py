@@ -42,10 +42,13 @@ def main() -> None:
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
     )
 
-    PROJECT_ROOT = Path(r"C:\Users\USER\Documents\CAPSTONE")
+    PROJECT_ROOT = Path(__file__).resolve().parent
     test_jsonl = PROJECT_ROOT / "data_processed" / "unified" / "test.jsonl"
 
     print("Loading test entries…")
+    if not test_jsonl.exists():
+        print(f"Dataset test file not found, skipped DONUT sample run: {test_jsonl}")
+        return
     samples = pick_samples(load_jsonl(test_jsonl))
     print(f"Picked {len(samples)} samples\n")
 

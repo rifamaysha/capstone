@@ -10,9 +10,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-import torch
+try:
+    import torch
+    from transformers import DonutProcessor, VisionEncoderDecoderModel
+except ImportError:
+    torch = None
+    DonutProcessor = None
+    VisionEncoderDecoderModel = None
 from PIL import Image
-from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,8 @@ class ReceiptParser:
             model_name: HuggingFace model id atau path lokal ke checkpoint.
             device: 'cuda' / 'cpu' / None (auto-detect).
         """
+        if torch is None or DonutProcessor is None or VisionEncoderDecoderModel is None:
+            raise ImportError("torch and transformers are required to instantiate ReceiptParser")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Loading DONUT (%s) on %s", model_name, self.device)
 
@@ -80,25 +87,30 @@ class ReceiptParser:
             return_tensors="pt",
         ).input_ids.to(self.device)
 
-        with torch.no_grad():
-            outputs = self.model.generate(
-                pixel_values,
-                decoder_input_ids=decoder_input_ids,
-                max_length=self.model.decoder.config.max_position_embeddings,
-                pad_token_id=self.processor.tokenizer.pad_token_id,
-                eos_token_id=self.processor.tokenizer.eos_token_id,
-                use_cache=True,
-                # Cegah model output token <unk> yang akan bikin parse gagal
-                bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
-                return_dict_in_generate=True,
-            )
+        # max_new_tokens=512 cuts CPU generation time ~3× vs max_position_embeddings (2048)
+        # while still covering any realistic receipt (~200-400 tokens typical output).
+        try:
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    pixel_values,
+                    decoder_input_ids=decoder_input_ids,
+                    max_new_tokens=512,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    eos_token_id=self.processor.tokenizer.eos_token_id,
+                    use_cache=True,
+                    bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
+                    return_dict_in_generate=True,
+                )
+        except Exception as exc:
+            logger.warning("DONUT generate() failed: %s", exc)
+            return {}
 
-        # Decode token → string XML-tagged
-        sequence = self.processor.batch_decode(outputs.sequences)[0]
-        sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
-        sequence = sequence.replace(self.processor.tokenizer.pad_token, "")
-        # Buang task prompt token di awal (cuma yg pertama, count=1)
-        sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()
-
-        # Convert XML-tagged string → nested dict (built-in helper DONUT)
-        return self.processor.token2json(sequence)
+        try:
+            sequence = self.processor.batch_decode(outputs.sequences)[0]
+            sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
+            sequence = sequence.replace(self.processor.tokenizer.pad_token, "")
+            sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()
+            return self.processor.token2json(sequence)
+        except Exception as exc:
+            logger.warning("DONUT decode/parse failed: %s", exc)
+            return {}
