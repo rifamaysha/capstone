@@ -1,0 +1,33 @@
+{
+  "active_classes": [
+    "makanan_minuman",
+    "transportasi",
+    "belanja",
+    "hiburan",
+    "lainnya"
+  ],
+  "label_to_id": {
+    "makanan_minuman": 0,
+    "transportasi": 1,
+    "belanja": 2,
+    "hiburan": 3,
+    "lainnya": 4
+  },
+  "id_to_label": {
+    "0": "makanan_minuman",
+    "1": "transportasi",
+    "2": "belanja",
+    "3": "hiburan",
+    "4": "lainnya"
+  },
+  "test_metrics": {
+    "test_loss": 1.4057754278182983,
+    "test_accuracy": 0.8725490196078431,
+    "test_f1_macro": 0.7416792177138362,
+    "test_f1_weighted": 0.8634009701441553,
+    "test_runtime": 24.9666,
+    "test_samples_per_second": 4.085,
+    "test_steps_per_second": 0.521,
+    "epoch": 8.0
+  }
+}

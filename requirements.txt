@@ -1,0 +1,26 @@
+# Smart Personal Expense runtime dependencies
+# ── FastAPI backend ────────────────────────────────────────────
+fastapi>=0.111,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9
+pydantic>=2.7,<3
+
+# ── Streamlit (legacy fallback) ───────────────────────────────
+streamlit>=1.36,<2
+pandas>=2.1,<3
+numpy>=1.26,<2
+Pillow>=10,<12
+opencv-python-headless>=4.8,<5
+plotly>=5.18,<6
+
+# OCR and document understanding
+easyocr>=1.7,<2
+torch>=2.2
+transformers>=4.40,<5
+sentencepiece>=0.1.99
+protobuf>=4.25,<6
+
+# IndoBERT training/inference helpers and recommendations
+scikit-learn>=1.3,<2
+accelerate>=0.26
+tqdm>=4.66,<5
