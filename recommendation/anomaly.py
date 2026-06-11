@@ -169,7 +169,36 @@ def detect_anomalies(
     ]
 
     if len(valid) < 2:
+        # ---- Rule-based fallback: flag if amount > 5x the single other tx ----
+        if len(valid) == 1:
+            return []
         return []
+
+    # ---- 1b. Rule-based detection: always run regardless of sample size ----
+    # Flag any transaction that is > 3x the mean of ALL transactions.
+    # This catches obvious outliers (e.g. IBox 7jt when others are 34rb) even
+    # when Isolation Forest can't fit due to small sample size.
+    amounts = [float(t.get("amount") or 0) for t in valid]
+    mean_amt = sum(amounts) / len(amounts)
+    rule_flagged_ids: set = set()
+    rule_anomalies: list[dict[str, Any]] = []
+
+    if mean_amt > 0:
+        for t in valid:
+            amt = float(t.get("amount") or 0)
+            if amt > mean_amt * 3:
+                tx_out = dict(t)
+                tx_out["anomaly_score"] = -0.6
+                tx_out["is_anomaly"] = True
+                tx_out["baseline_median"] = sorted(amounts)[len(amounts) // 2]
+                tx_out["baseline_mean"] = round(mean_amt, 2)
+                tx_out["baseline_scope"] = "rule_based"
+                tx_out["anomaly_reason"] = (
+                    f"Nominal Rp {amt:,.0f} jauh lebih tinggi dari rata-rata "
+                    f"transaksi lain (Rp {mean_amt:,.0f})"
+                )
+                rule_flagged_ids.add(t.get("id"))
+                rule_anomalies.append(tx_out)
 
     if not by_category:
         return _detect_in_group(valid, contamination, random_state, scope="global")
@@ -208,12 +237,16 @@ def detect_anomalies(
             )
         # If even the fallback group is < 2, skip silently (can't fit a model)
 
+    # ---- 4. Merge: add rule-based anomalies not already caught by IsolationForest ----
+    iso_ids = {a.get("id") for a in anomalies}
+    for ra in rule_anomalies:
+        if ra.get("id") not in iso_ids:
+            anomalies.append(ra)
+
     return anomalies
 
 
-# ---------------------------------------------------------------------------
 # Quick inline self-test — only runs when script is executed directly
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     _synthetic = [
         {"amount": 25000, "category": "makanan_minuman"},
@@ -234,5 +267,5 @@ if __name__ == "__main__":
     # Edge cases
     assert detect_anomalies([]) == []
     assert detect_anomalies([{"amount": 0}]) == []
-    assert detect_anomalies([{"amount": 100}]) == []   # only 1 valid tx
+    assert detect_anomalies([{"amount": 100}]) == []   
     print("[SELF-TEST] Edge cases passed.")
