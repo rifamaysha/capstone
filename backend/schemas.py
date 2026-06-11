@@ -122,6 +122,14 @@ class InsightSummary(BaseModel):
     top_category: str = ""
     top_category_display: str = ""
     top_merchant: str = ""
+    monthly_income: float = 0.0
+    remaining_balance: float = 0.0
+
+
+class DailyExpenseItem(BaseModel):
+    date: str
+    total: float
+    count: int
 
 
 class InsightResponse(BaseModel):
@@ -131,3 +139,4 @@ class InsightResponse(BaseModel):
     recommendations: list[Recommendation] = Field(default_factory=list)
     transactions_to_review: list[AnomalyTransaction] = Field(default_factory=list)
     budget_comparison: dict[str, Any] = Field(default_factory=dict)
+    daily_expenses: list[DailyExpenseItem] = Field(default_factory=list)
