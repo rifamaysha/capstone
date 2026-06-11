@@ -175,7 +175,7 @@ export default function History({ onNavigate }) {
                   <div style={{ color: "var(--color-muted)", fontSize: 14 }}>Daftar transaksi yang sudah disimpan.</div>
                 </div>
               </div>
-              <TransactionTable transactions={filtered} />
+              <TransactionTable transactions={filtered} showSavedAt />
             </div>
 
             <div className="flex justify-end">
