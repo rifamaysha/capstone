@@ -32,17 +32,26 @@ function displaySource(source) {
   return "Scan Transaksi";
 }
 
-export default function TransactionTable({ transactions }) {
+function formatSavedAt(savedAt) {
+  if (!savedAt) return "-";
+  try {
+    const d = new Date(savedAt);
+    return d.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return savedAt;
+  }
+}
+
+export default function TransactionTable({ transactions, showSavedAt = false }) {
   if (!transactions || transactions.length === 0) {
     return (
-      <div
-        style={{
-          padding: "28px",
-          textAlign: "center",
-          color: "var(--color-muted)",
-          fontSize: "14px",
-        }}
-      >
+      <div style={{ padding: "28px", textAlign: "center", color: "var(--color-muted)", fontSize: "14px" }}>
         Tidak ada transaksi yang sesuai.
       </div>
     );
@@ -57,7 +66,8 @@ export default function TransactionTable({ transactions }) {
             <th style={{ textAlign: "right" }}>Amount</th>
             <th>Kategori</th>
             <th>Sumber</th>
-            <th>Tanggal</th>
+            <th>Tanggal Transaksi</th>
+            {showSavedAt && <th>Disimpan</th>}
           </tr>
         </thead>
         <tbody>
@@ -68,17 +78,11 @@ export default function TransactionTable({ transactions }) {
             return (
               <tr key={t.id}>
                 <td>
-                  <span
-                    style={{ fontWeight: 750 }}
-                    title={full.length > MERCHANT_MAX ? full : undefined}
-                  >
+                  <span style={{ fontWeight: 750 }} title={full.length > MERCHANT_MAX ? full : undefined}>
                     {shown}
                   </span>
                 </td>
-                <td
-                  className="font-bold text-right"
-                  style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
-                >
+                <td className="font-bold text-right" style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
                   {formatRp(t.amount)}
                 </td>
                 <td>
@@ -92,6 +96,11 @@ export default function TransactionTable({ transactions }) {
                 <td style={{ color: "var(--color-muted)", fontSize: "13px", whiteSpace: "nowrap" }}>
                   {t.date || "-"}
                 </td>
+                {showSavedAt && (
+                  <td style={{ color: "var(--color-muted)", fontSize: "13px", whiteSpace: "nowrap" }}>
+                    {formatSavedAt(t.saved_at)}
+                  </td>
+                )}
               </tr>
             );
           })}
