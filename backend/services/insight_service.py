@@ -1,4 +1,3 @@
-"""Insight service — generates dashboard summaries from saved transactions."""
 from __future__ import annotations
 
 import logging
@@ -8,6 +7,7 @@ from typing import Any
 from ..schemas import (
     AnomalyTransaction,
     CategoryBreakdownItem,
+    DailyExpenseItem,
     InsightResponse,
     InsightSummary,
     RecentTransaction,
@@ -72,6 +72,8 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
         top_category=top_cat,
         top_category_display=_cat_display(top_cat),
         top_merchant=top_merchant,
+        monthly_income=monthly_income if monthly_income > 0 else 0.0,
+        remaining_balance=max(0.0, monthly_income - total_expense) if monthly_income > 0 else 0.0,
     )
 
     category_breakdown = []
@@ -151,7 +153,7 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     try:
         from recommendation import detect_anomalies
 
-        anomaly_results = detect_anomalies(txs)
+        anomaly_results = detect_anomalies(txs, min_samples=1)
         # detect_anomalies returns augmented transaction dicts (is_anomaly=True)
         # anomaly_score is from IsolationForest: more negative = more anomalous
         for result in anomaly_results:
@@ -180,6 +182,24 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     except Exception as exc:
         logger.warning("Anomaly detection unavailable: %s", exc)
 
+    # Daily expense aggregation 
+    daily_map: dict[str, dict] = {}
+    for t in txs:
+        raw_date = t.get("date", "") or t.get("saved_at", "")[:10]
+        # Normalise to YYYY-MM-DD
+        day = str(raw_date).strip()[:10]
+        if not day:
+            continue
+        if day not in daily_map:
+            daily_map[day] = {"total": 0.0, "count": 0}
+        daily_map[day]["total"] += float(t.get("amount", 0))
+        daily_map[day]["count"] += 1
+
+    daily_expenses = [
+        DailyExpenseItem(date=d, total=round(v["total"], 2), count=v["count"])
+        for d, v in sorted(daily_map.items())
+    ]
+
     return InsightResponse(
         summary=summary,
         category_breakdown=category_breakdown,
@@ -187,4 +207,5 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
         recommendations=recommendations,
         transactions_to_review=transactions_to_review,
         budget_comparison=budget_comparison,
+        daily_expenses=daily_expenses,
     )
