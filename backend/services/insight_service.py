@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from datetime import datetime
 from typing import Any
 
 from ..schemas import (
@@ -16,6 +17,39 @@ from ..schemas import (
 from .transaction_service import get_all_transactions
 
 logger = logging.getLogger(__name__)
+
+
+# Indonesian month names for the period label shown in budget comparison.
+_INDO_MONTHS = [
+    "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+]
+
+
+def _current_month_prefix(now: datetime | None = None) -> str:
+    """Return 'YYYY-MM' prefix for the current calendar month."""
+    now = now or datetime.now()
+    return f"{now.year:04d}-{now.month:02d}"
+
+
+def _current_month_label(now: datetime | None = None) -> str:
+    """Return human-readable month label like 'Juni 2026'."""
+    now = now or datetime.now()
+    return f"{_INDO_MONTHS[now.month]} {now.year}"
+
+
+def _is_current_month(tx: dict, prefix: str) -> bool:
+    """Check if a transaction belongs to the given YYYY-MM month.
+
+    Tries the user-visible `date` field first, falls back to `saved_at`
+    so transactions without an extracted date are still counted (using
+    the time they were saved, which is the user's recent activity).
+    """
+    raw = (tx.get("date") or "").strip()
+    if len(raw) >= 7 and raw[:7] == prefix:
+        return True
+    saved = (tx.get("saved_at") or "")[:7]
+    return saved == prefix
 
 CATEGORY_DISPLAY: dict[str, str] = {
     "makanan_minuman": "Makanan & Minuman",
@@ -144,7 +178,14 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
         # Only run budget analysis when real income data is available.
         # Never fabricate income from spending figures — that produces misleading insights.
         if monthly_income > 0:
-            budget_result = analyze_budget(txs, monthly_income)
+            # Filter to current calendar month so a single monthly_income is
+            # compared against a single month of spending. Without this filter,
+            # accumulating transactions across months makes the "over budget"
+            # calculation drift toward false alarms.
+            month_prefix = _current_month_prefix()
+            month_txs = [t for t in txs if _is_current_month(t, month_prefix)]
+
+            budget_result = analyze_budget(month_txs, monthly_income)
             actual = budget_result.get("actual_ratio", {})
             ideal = budget_result.get("ideal_ratio", {})
             # Build bucket comparison for frontend
@@ -162,6 +203,8 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
                 "monthly_income": monthly_income,
                 "total_spent": budget_result.get("total_spent", 0.0),
                 "buckets": buckets,
+                "period_label": _current_month_label(),
+                "month_transaction_count": len(month_txs),
             }
             # recommendations is a list[str] in budget_rule.py
             for rec_str in budget_result.get("recommendations", []):
