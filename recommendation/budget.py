@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+
+def _format_rp(n: float) -> str:
+    """Format number as 'Rp 1.234.567' (Indonesian thousand separator)."""
+    return f"Rp {int(round(n)):,}".replace(",", ".")
+
+
 # Bucket mapping 
 # Maps internal category keys → budget bucket
 CATEGORY_BUCKET: dict[str, str] = {
@@ -84,7 +90,7 @@ def analyze_budget(
     if total_spent > monthly_income:
         over = total_spent - monthly_income
         recs.append(
-            f"Pengeluaran melebihi pemasukan sebesar Rp {over:,.0f}. "
+            f"Pengeluaran melebihi pemasukan sebesar {_format_rp(over)}. "
             "Coba kurangi pengeluaran keinginan terlebih dahulu."
         )
 
