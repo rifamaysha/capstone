@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -113,25 +114,66 @@ _RC_STRONG = frozenset({
 })
 
 _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Order matters: more specific / less ambiguous categories first so substring
+    # matches (e.g. "wifi" → tagihan) win before generic food/venue terms.
     ("tagihan", (
-        "pln", "listrik", "pdam", "internet", "wifi", "pulsa", "paket data",
-        "telkom", "youtube music", "spotify", "netflix", "subscription",
+        # Generic utility/bill terms
+        "tagihan", "bill", "bills", "utility", "utilities",
+        "langganan", "subscription", "membership", "member", "monthly",
+        "insurance", "asuransi",
+        # Indonesian utility categories (PLN/Telkom are utility-class, not generic brand).
+        # "air" and "water" are intentionally NOT included: they collide with
+        # beverage merchants like "AIR MINERAL". "pdam" remains because it is
+        # an Indonesian water-utility-specific term with no beverage collision.
+        "pln", "listrik", "electricity", "pdam",
+        "internet", "wifi", "pulsa", "paket data", "telkom",
     )),
-    ("transportasi", ("spbu", "shell", "parkir", "parking", "tol", "toll", "grab", "gojek", "kereta", "travel")),
+    ("kesehatan", (
+        "dokter", "doctor", "klinik", "clinic", "apotek", "pharmacy",
+        "dental", "dentist", "hospital", "rumah sakit",
+        "medical", "obat", "medicine", "lab", "laboratory",
+    )),
+    ("pendidikan", (
+        "sekolah", "school", "kampus", "campus", "university", "universitas",
+        "course", "kursus", "class", "kelas", "training", "bootcamp",
+        "education", "pendidikan", "tuition", "les",
+    )),
+    ("transportasi", (
+        "transport", "transportation", "parkir", "parking", "tol", "toll",
+        "spbu", "fuel", "bensin", "taxi", "taksi", "ride", "travel",
+        "train", "kereta", "bus",
+    )),
+    ("hiburan", (
+        "hiburan", "entertainment", "wisata", "movie", "cinema", "bioskop",
+        "game", "games", "ticket", "tiket", "karaoke", "event",
+        "konser", "concert", "museum", "streaming",
+    )),
     ("belanja", (
-        "alfamart", "indomaret", "alfamidi", "minimarket", "supermarket",
-        "shopee", "tokopedia", "lazada", "store", "mart", "retail", "toko",
+        # Generic retail terms (no specific marketplace/minimart brand names)
+        "shop", "store", "toko", "retail", "market", "supermarket", "minimarket",
+        "groceries", "grocery", "mall", "fashion", "clothing", "shoes",
         "aksesoris", "accessories",
     )),
     ("makanan_minuman", (
-        "coffee", "kopi", "cafe", "resto", "restaurant", "restoran", "makanan",
-        "minuman", "mie", "ayam", "bakso", "mixue", "gacoan", "martabak",
-        "pizza", "mozzarella", "dapur", "tahu", "kantin", "warung",
-        "warmindo", "warteg", "kedai", "nasi", "roti", "bread", "bakery",
-        "cake", "cakes",
+        # Generic food/drink terms (English + Indonesian)
+        "food", "drink", "beverage", "makanan", "minuman", "meal", "snack",
+        "kitchen", "dessert",
+        # Generic venue terms
+        "cafe", "coffee", "kopi", "resto", "restaurant", "restoran",
+        "warung", "kedai", "kantin", "rumah makan", "rm",
+        # Bakery / pastry — common categories
+        "bakery", "bread", "roti", "cake", "cakes",
+        # Common Indonesian food types (general, not brand/menu)
+        "nasi", "mie", "ayam", "bakso", "sop", "soto", "sate", "seafood",
+        # Generic drink terms
+        "juice", "milk", "smoothie",
+        # Common menu-item nouns (general food domain, helpful when receipt items
+        # are visible but merchant header is unreadable — receipts may contain
+        # these in their item lines and warrant the makanan_minuman category).
+        "chicken", "beef", "fish", "pork", "burger", "pizza", "sandwich",
+        "ramen", "sushi", "curry", "noodle",
     )),
     ("lainnya", ("laundry", "dry clean", "laundromat")),
-    ("kesehatan", ("dokter", "klinik", "apotek", "dental", "hospital", "rumah sakit")),
 )
 
 _POPULAR_MERCHANTS = (
@@ -143,13 +185,20 @@ _POPULAR_MERCHANTS = (
 _mbanking_parser: Any = None
 _receipt_parser: Any = None
 _classifier: Any = None
+_mbanking_parser_lock = threading.Lock()
 
 
 def _get_mbanking_parser() -> Any:
+    """Singleton MBankingParser with thread-safe double-checked init.
+    The first call loads EasyOCR (~25s); subsequent calls reuse the cached parser.
+    Lock guard prevents concurrent first requests from double-loading the OCR model."""
     global _mbanking_parser
-    if _mbanking_parser is None:
-        from mbanking_inference import MBankingParser
-        _mbanking_parser = MBankingParser()
+    if _mbanking_parser is not None:
+        return _mbanking_parser
+    with _mbanking_parser_lock:
+        if _mbanking_parser is None:
+            from mbanking_inference import MBankingParser
+            _mbanking_parser = MBankingParser()
     return _mbanking_parser
 
 
@@ -162,10 +211,11 @@ def _get_receipt_parser() -> Any:
 
 
 def _get_classifier() -> Any:
+    """Singleton ML category classifier with safe fallback when model is unavailable."""
     global _classifier
     if _classifier is None:
-        from indobert import HybridCategoryClassifier
-        _classifier = HybridCategoryClassifier(MODEL_DIR)
+        from .category_classifier import SafeCategoryClassifier
+        _classifier = SafeCategoryClassifier.get(MODEL_DIR)
     return _classifier
 
 
@@ -203,10 +253,18 @@ def _normalize_donut_result(raw: Any) -> dict[str, Any]:
 
 
 def _classify_category(text: str) -> dict[str, Any]:
+    """Classify text into a category.
+
+    Order: keyword (general, covers all 8 categories) → ML classifier (only
+    5 labels: makanan_minuman, transportasi, belanja, hiburan, lainnya) →
+    lainnya fallback. ML output below its internal threshold also returns
+    lainnya so noise is never promoted to a confident category.
+    """
     if not text or not text.strip():
-        return {"label": "lainnya", "confidence": 0.0}
+        return {"label": "lainnya", "confidence": 0.0, "source": "empty_input"}
     keyword_result = _keyword_category(text)
     if keyword_result:
+        keyword_result.setdefault("source", "keyword")
         return keyword_result
     try:
         clf = _get_classifier()
@@ -214,10 +272,11 @@ def _classify_category(text: str) -> dict[str, Any]:
         return {
             "label": result.get("label", "lainnya"),
             "confidence": float(result.get("confidence", 0.0)),
+            "source": result.get("source", "ml_classifier"),
         }
     except Exception as exc:
         logger.warning("Category classifier failed: %s", exc)
-        return {"label": "lainnya", "confidence": 0.0}
+        return {"label": "lainnya", "confidence": 0.0, "source": "classifier_error"}
 
 
 def _keyword_category(text: str) -> dict[str, Any] | None:
@@ -288,6 +347,25 @@ def clean_merchant_candidate(text: str) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip(" \t\r\n,.;:-!()[]{}")
     if not clean:
         return ""
+    # Strip QR/payment prefixes that often leak from OCR labels:
+    # "FMI QR BDG BRAGA" -> "BDG BRAGA", "QR PAY TRANSMART" -> "TRANSMART",
+    # "Pembayaran QR Toko XYZ" -> "Toko XYZ"
+    clean = re.sub(
+        r"^(?:fmi\s*qr|qr\s*pay|pembayaran\s*qr|bayar\s*qr|qr\s*bayar|qris|qr)\s+",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip(" ,.;:-")
+    # Strip trailing payment suffixes: " QR" / " QRIS" / single trailing " Q"
+    # (the lone " Q" pattern is a common OCR truncation of " QR")
+    clean = re.sub(
+        r"\s+(?:qris|qr|q)\s*$",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip(" ,.;:-")
+    if not clean:
+        return ""
     key = re.sub(r"[^a-z0-9]", "", clean.lower())
     for merchant_name in _POPULAR_MERCHANTS:
         merchant_key = re.sub(r"[^a-z0-9]", "", merchant_name.lower())
@@ -295,6 +373,9 @@ def clean_merchant_candidate(text: str) -> str:
             return merchant_name
         if len(key) >= 6 and SequenceMatcher(None, key, merchant_key).ratio() >= 0.88:
             return merchant_name
+    # Semicolons never appear in legitimate merchant names; trim trailing location/code
+    if ";" in clean:
+        clean = clean.split(";")[0].strip(" ,.;:-")
     hard_cut = _MERCHANT_HARD_CUT_RE.search(clean)
     if hard_cut and hard_cut.start() > 0:
         clean = clean[: hard_cut.start()].strip(" ,.;:-")
@@ -329,13 +410,31 @@ def is_valid_merchant_candidate(text: str) -> bool:
         lower,
     ):
         return False
-    if lower in {"xendit", "midtrans", "bank", "bank bca", "bank mandiri", "bank bni", "bank bri"}:
+    # Reject payment acquirers / gateways (prefix match to also catch e.g. "Xendit Indonesia")
+    if re.match(r"^(xendit|midtrans|doku|nicepay|faspay|ipaymu|tripay)\b", lower):
+        return False
+    # Reject e-wallet / banking app names — these are payment source labels, not merchants.
+    # Prefix match catches "GoPay Saldo", "OVO Cash", "DANA Premium", etc.
+    if re.match(
+        r"^(gopay|ovo|dana|shopeepay|linkaja|blu|jenius|flip|"
+        r"livin|bca\s+mobile|mandiri\s+livin|bri\s+mo|bni\s+mobile|"
+        r"mobile\s+banking|m-?banking)\b",
+        lower,
+    ):
+        return False
+    if lower in {"bank", "bank bca", "bank mandiri", "bank bni", "bank bri"}:
         return False
     if re.search(r"\b(rp|idr)\s*[\d.,oO]+\b", lower) or re.match(r"^[\-\s]*(rp|idr)\b", lower):
         return False
     if re.search(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b", clean):
         return False
     if re.search(r"\b\d{1,2}[:.]\d{2}(:\d{2})?\b", clean):
+        return False
+    # Reject URL/domain/email — never a real merchant header
+    if re.search(r"(?:https?://|www\.|\.com\b|\.co\.id\b|\.id\b|@[a-z0-9.-]+\.[a-z]{2,})", lower):
+        return False
+    # Reject phone-number style: "+62..." or 8+ digits separated by spaces/dashes
+    if re.match(r"^\+?\d[\d\s\-]{7,}$", clean):
         return False
     if clean.isdigit():
         return False
@@ -462,6 +561,7 @@ def extract_from_image(image_path: Path, selected_type: str) -> dict[str, Any]:
     field_conf: dict[str, float] = {"merchant": 0.0, "amount": 0.0, "date": 0.0}
     raw_text = ""
     route = "unknown"
+    sc_category_key: str | None = None
     success = True
     status = "extracted"
     started_at = time.perf_counter()
@@ -517,7 +617,8 @@ def extract_from_image(image_path: Path, selected_type: str) -> dict[str, Any]:
             for key, value in stage_times.items()
         )
         debug_trace   = f"[TIMING] {timing_text}\n[ROUTE] selected_type={selected_type} route={route} confidence={doc_type_conf:.2f}\n{debug_trace}"
-        raw_text      = str(raw.get("raw_text", "") or "")
+        raw_text         = str(raw.get("raw_text", "") or "")
+        sc_category_key  = raw.get("screenshot_category_key") if route == "screenshot" else None
         elapsed = time.perf_counter() - started_at
         if elapsed > MAX_EXTRACTION_SECONDS:
             warnings_list.append("Pembacaan membutuhkan waktu lebih lama. Periksa kembali hasilnya.")
@@ -573,23 +674,43 @@ def extract_from_image(image_path: Path, selected_type: str) -> dict[str, Any]:
     # â”€â”€ 4. Category classification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elapsed_for_category = time.perf_counter() - started_at
     category_started = time.perf_counter()
+    # Priority chain for category:
+    # 1. Keyword match on final merchant name (highest confidence)
+    # 2. Category UI label from banking app screen (reliable, not raw OCR noise)
+    # 3. IndobertClassifier on merchant text
+    # 4. Raw OCR text (only for receipts; screenshot OCR has too much bank/acquirer noise)
     cat_result = _category_from_merchant(merchant)
+    cat_source = "merchant_keyword" if cat_result else None
     if not cat_result:
-        # Raw OCR is only a low-priority fallback because screenshot text often
-        # contains banks, payment gateways, and transfer labels that are not the merchant.
-        if elapsed_for_category > MAX_EXTRACTION_SECONDS:
+        if route == "screenshot" and sc_category_key and sc_category_key in CATEGORY_DISPLAY:
+            # Category detected from the banking app's own UI label (e.g. "Food", "Shopping")
+            cat_result = {"label": sc_category_key, "confidence": 0.72}
+            cat_source = "screenshot_app_label"
+        elif elapsed_for_category > MAX_EXTRACTION_SECONDS:
             cat_result = {"label": "lainnya", "confidence": 0.0}
+            cat_source = "timeout_fallback"
+        elif merchant:
+            # Merchant exists but no keyword hit — try classifier on merchant text only
+            cat_result = _classify_category(merchant)
+            cat_source = "merchant_classifier"
+        elif route != "screenshot":
+            # Receipt: raw OCR text is meaningful (product names, store headers)
+            cat_result = _classify_category(raw_text or "")
+            cat_source = "raw_text_receipt"
+            if raw_text:
+                cat_result["confidence"] = min(cat_result["confidence"], 0.42)
         else:
-            cat_result = _classify_category(merchant or raw_text or "")
-        if not merchant and raw_text:
-            cat_result["confidence"] = min(cat_result["confidence"], 0.42)
+            # Screenshot with no merchant: raw OCR is dominated by bank/acquirer noise
+            cat_result = {"label": "lainnya", "confidence": 0.0}
+            cat_source = "screenshot_no_merchant"
     category     = cat_result["label"]
     cat_conf     = cat_result["confidence"]
     stage_times["category"] = time.perf_counter() - category_started
     if debug_trace:
         debug_trace = (
             f"[TIMING_CATEGORY] category={stage_times['category']:.2f}s "
-            f"total={time.perf_counter() - started_at:.2f}s\n{debug_trace}"
+            f"total={time.perf_counter() - started_at:.2f}s "
+            f"cat_source={cat_source} cat_label={category}\n{debug_trace}"
         )
 
     return {
@@ -629,7 +750,11 @@ def _extract_screenshot(image_path: Path, postprocess: Any, ocr_lines: list[str]
     existing_merchant = str(raw.get("recipient", "") or "")
     existing_amount   = _normalize_amount(raw.get("amount", 0))
     existing_date     = str(raw.get("date", "") or "")
-    doc_type          = str(raw.get("screenshot_category", "mbanking_transaction_detail") or "mbanking_transaction_detail")
+    # screenshot_category from MBankingParser: either a category key (e.g. "makanan_minuman")
+    # or None if no recognizable UI category label was found in the banking app screen
+    sc_cat_raw        = raw.get("screenshot_category")
+    sc_category_key   = sc_cat_raw if sc_cat_raw and sc_cat_raw in CATEGORY_DISPLAY else None
+    doc_type          = sc_cat_raw or "mbanking_transaction_detail"
 
     post_started = time.perf_counter()
     post = postprocess(
@@ -646,15 +771,16 @@ def _extract_screenshot(image_path: Path, postprocess: Any, ocr_lines: list[str]
     )
 
     return {
-        "merchant":         post.get("merchant", existing_merchant) or existing_merchant,
-        "merchant_candidates": [post.get("merchant", ""), existing_merchant],
-        "amount":           _normalize_amount(post.get("amount", existing_amount)),
-        "date":             post.get("date", existing_date) or existing_date,
-        "document_type":    doc_type,
-        "field_confidence": post.get("field_confidence", {}),
-        "warnings":         post.get("warnings", []),
-        "debug_trace":      debug_trace,
-        "raw_text":         "\n".join(ocr_lines),
+        "merchant":              post.get("merchant", existing_merchant) or existing_merchant,
+        "merchant_candidates":   [post.get("merchant", ""), existing_merchant],
+        "amount":                _normalize_amount(post.get("amount", existing_amount)),
+        "date":                  post.get("date", existing_date) or existing_date,
+        "document_type":         doc_type,
+        "screenshot_category_key": sc_category_key,
+        "field_confidence":      post.get("field_confidence", {}),
+        "warnings":              post.get("warnings", []),
+        "debug_trace":           debug_trace,
+        "raw_text":              "\n".join(ocr_lines),
     }
 
 

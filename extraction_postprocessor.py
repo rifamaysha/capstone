@@ -169,7 +169,15 @@ _RECEIPT_AMOUNT_REJECT_RE = re.compile(
 
 _RECEIPT_ITEM_WORD_RE = re.compile(
     r"\b(nasi|ayam|mie|bakso|kopi|coffee|tea|water|roti|pasta|burger|"
-    r"rice|noodle|drink)\b",
+    r"rice|noodle|drink|"
+    # Proteins / ingredients (general food nouns that strongly signal a menu item)
+    r"chicken|beef|pork|fish|egg|seafood|shrimp|tofu|cheese|cream|chocolate|"
+    # Cooking method adjectives commonly appearing in menu items
+    r"crispy|grilled|fried|steamed|baked|"
+    # Dishes / specific food types
+    r"curry|soup|salad|sandwich|udon|ramen|spaghetti|sushi|dimsum|"
+    # Desserts / drinks
+    r"cake|cakes|cookies|donut|muffin|brownies|gelato|yogurt|milk|juice|smoothie|shake|matcha|latte|sundae)\b",
     re.IGNORECASE,
 )
 
@@ -1327,6 +1335,12 @@ def _is_bad_merchant(text: str) -> bool:
         return True
     if any(lower.startswith(prefix) for prefix in _ADDRESS_PREFIXES):
         return True
+    # Reject URL/domain/email — never a real merchant name
+    if re.search(r"(?:https?://|www\.|\.com\b|\.co\.id\b|\.id\b|@[a-z0-9.-]+\.[a-z]{2,})", lower):
+        return True
+    # Reject phone-number style: "+62..." or long digit string with spaces/dashes
+    if re.match(r"^\+?\d[\d\s\-]{7,}$", stripped):
+        return True
     # Purely numeric / mostly-digit string
     digits = re.sub(r"\D", "", stripped)
     if len(digits) >= 10 and len(digits) / max(len(stripped), 1) > 0.55:
@@ -1438,9 +1452,29 @@ def _is_receipt_merchant_noise(line: str, *, normalized: str = "") -> bool:
     norm_lower = (normalized or clean).lower()
     if not clean:
         return True
+    # Short-circuit: candidates that match a known canonical merchant (e.g.
+    # "Mie Gacoan") must never be treated as item noise, even if they happen
+    # to contain a food-item keyword like "mie".
+    canonical_key = _clean_merchant_key(normalized or clean)
+    if canonical_key and canonical_key in _MERCHANT_CANONICAL:
+        return False
     if _RECEIPT_FOOTER_RE.search(lower) or _RECEIPT_AMOUNT_REJECT_RE.search(lower):
         return True
-    if re.search(r"(?:https?://|www\.|\.com|\.co\.id|link|url|/f/)", lower):
+    if re.search(r"(?:https?://|www\.|\.com\b|\.co\.id\b|\.id\b|link|url|/f/|"
+                 r"bit\.ly|t\.co|wa\.me|@[a-z0-9.-]+\.[a-z]{2,})", lower):
+        return True
+    # Reject phone-number style anywhere in the candidate line
+    if re.search(r"(?:\+62|62)[\s\-]?\d[\d\s\-]{6,}", clean) or re.search(r"\b0\d{2,3}[\s\-]?\d{3,4}[\s\-]?\d{3,5}\b", clean):
+        return True
+    # Reject hyphenated alphanumeric reference codes (e.g. "260303-DHM8-X6ACYO", "TXN-2026-XYZ123")
+    if re.match(r"^[A-Z0-9]{3,12}(?:-[A-Z0-9]{2,12}){1,4}$", clean, re.IGNORECASE):
+        return True
+    # Reject all-uppercase compact alphanumeric ref codes (≥6 chars, has both letter+digit)
+    if (
+        re.fullmatch(r"[A-Z0-9]{6,}", clean)
+        and any(c.isalpha() for c in clean)
+        and any(c.isdigit() for c in clean)
+    ):
         return True
     if _is_item_table_line(clean):
         return True
@@ -1703,7 +1737,7 @@ def extract_merchant_mbanking(
         return clean
 
     def amount_line(text: str) -> bool:
-        return bool(re.search(r"[-â€“â€”]?\s*(?:rp|idr)\.?\s*[\d.,OoIlSBb]+", _fix_ocr_digits(text), re.I))
+        return bool(re.search(r"[-–—]?\s*(?:rp|idr)\.?\s*[\d.,OoIlSBb]+", _fix_ocr_digits(text), re.I))
 
     def reference_or_label(text: str) -> bool:
         lower = text.strip().lower()

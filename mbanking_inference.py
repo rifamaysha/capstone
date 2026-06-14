@@ -315,7 +315,8 @@ _LABEL_BLACKLIST = {
     "hiburan", "entertainment", "tagihan", "bills", "utilities",
     # Field labels (Indonesian)
     "rincian transaksi", "metode pembayaran", "id transaksi", "id transaksi gojek",
-    "bagikan resi", "lihat resi", "kategori", "no. ref", "tipe",
+    "bagikan resi", "lihat resi", "lihat bukti transaksi", "lihat bukti bayar",
+    "bagikan bukti transaksi", "bagikan bukti bayar", "kategori", "no. ref", "tipe",
     "selesai", "success", "free", "split", "tutup", "no. ref blu",
     "transaksi", "qris", "atur jumlah", "bagi bukti bayar",
     "detail transaksi", "rincian pembayaran", "informasi transaksi",
@@ -340,6 +341,8 @@ _BANK_STATUS_NAMES = {
     "shopeepay", "gopay", "dana", "ovo", "linkaja", "blu",
     "qris payment successful", "pembayaran berhasil", "transaction details",
     "rincian pembayaran", "rincian transaksi",
+    # Payment acquirers / gateways — never a valid merchant name
+    "xendit", "midtrans", "doku", "nicepay", "faspay", "ipaymu", "tripay",
 }
 
 _CITY_ONLY_SET: frozenset[str] = frozenset({
@@ -439,6 +442,22 @@ def _normalize_date_candidate(raw: str) -> str:
     return ""
 
 
+def _is_likely_time_string(raw: str) -> bool:
+    """True if ``raw`` looks like a clock time HH.MM.SS (with . or : separator)
+    rather than a date. Used to demote ambiguous strings like ``12.04.23`` that
+    could be either Dec 4 2023 or 12:04:23. We only declare it ``likely time``
+    when all three numbers fall within HH/MM/SS bounds AND the year value is
+    only 2 digits (real dates on receipts are almost always 4-digit-year)."""
+    m = re.match(r"^\s*(\d{1,2})[.:](\d{1,2})[.:](\d{1,4})\s*$", str(raw).strip())
+    if not m:
+        return False
+    h, mi, last = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # 4-digit year → very likely a date, not time
+    if last >= 1000:
+        return False
+    return 0 <= h <= 23 and 0 <= mi <= 59 and 0 <= last <= 59
+
+
 def _date_candidates(text: str) -> list[dict[str, Any]]:
     lines = [_normalize_date_ocr_text(line) for line in (text or "").splitlines() if line.strip()]
     if not lines:
@@ -449,6 +468,13 @@ def _date_candidates(text: str) -> list[dict[str, Any]]:
         for pidx, pattern in enumerate(_DATE_PATTERNS):
             for m in pattern.finditer(line):
                 raw = m.group(0)
+                # Skip candidates that look like a clock time (e.g. "12.04.23"
+                # is 12:04:23, not Dec 4 2023) unless the window has a clear
+                # date-context keyword to disambiguate.
+                if _is_likely_time_string(raw) and not any(
+                    k in window for k in ("tanggal", "date", "selesai pada", "paid at")
+                ):
+                    continue
                 value = _normalize_date_candidate(raw)
                 if not value:
                     continue
@@ -909,9 +935,32 @@ class MBankingParser:
                 return
             lower = line_text.lower()
             norm_lower = _normalize_ocr_digits(lower)
+            # Heavy penalty if the value looks like a year (1990-2100) and the
+            # line lacks any currency marker. Real-world transaction amounts
+            # almost never fall in this narrow 4-digit window without a Rp/IDR.
+            if 1990 <= value <= 2100 and not re.search(r"\b(rp|idr)\b", norm_lower):
+                score -= 90
+                reason += "|year_no_currency_penalty"
+            # Also penalize when the line clearly looks like a date with a
+            # named month + 4-digit year — captured value would be the year.
+            if 1990 <= value <= 2100 and re.search(
+                r"\b(jan|feb|mar|apr|mei|may|jun|jul|aug|agu|ags|sep|okt|oct|nov|des|dec)[a-z]*\.?\s+\d{2,4}\b",
+                lower,
+            ):
+                score -= 80
+                reason += "|date_year_penalty"
             if any(k in lower for k in ("biaya admin", "fee", "saldo")):
                 score -= 55
                 reason += "|fee_or_balance_penalty"
+            # Penalize subtotal / tax / service / discount / change / tender lines so
+            # the final-total line wins on receipts. Word-boundary checks below.
+            if re.search(
+                r"\b(sub\s*total|subtotal|tax|pajak|ppn|pb1|service\s*charge|service|"
+                r"discount|diskon|potongan|change|kembalian|kembali|cash|tunai|tender)\b",
+                lower,
+            ):
+                score -= 50
+                reason += "|non_final_line_penalty"
             if re.search(
                 r"\b(id transaksi|transaction id|reference|referensi|no\.?\s*ref|"
                 r"merchant pan|customer pan|terminal id|token|source of fund|"
@@ -1088,7 +1137,7 @@ class MBankingParser:
 
         # ------------------------------------------------------------------ #
         # Strategy 0: inline QR-payment pattern                               #
-        # "Pembayaran QR ke Pasta Nafisa, ..." → "Pasta Nafisa"              #
+        # "Pembayaran QR ke <merchant>" / "QR Bayar ke <merchant>"            #
         # ------------------------------------------------------------------ #
         for line in lines:
             m = re.search(
@@ -1234,8 +1283,8 @@ class MBankingParser:
 
         logger.debug("_parse_recipient Strategy2 candidates: %s", candidates[:5])
 
-        # Prefer ALL-CAPS candidates (QRIS merchant names like 'SOP BURTOK CAB ACEH')
-        # but exclude location strings even if ALL-CAPS
+        # Prefer ALL-CAPS candidates because QRIS merchant names are often rendered in uppercase.
+        # Exclude location strings even if ALL-CAPS (e.g. "CITY, 40267, ID").
         upper_cands = [
             c for c in candidates
             if re.search(r"[A-Z]", c) and c == c.upper()
