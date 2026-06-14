@@ -90,6 +90,8 @@ export default function UploadProcess({ onNavigate }) {
   const [manualForm, setManualForm] = useState(EMPTY_FORM);
   const [manualMessage, setManualMessage] = useState("");
   const [manualError, setManualError] = useState("");
+  const [manualSaved, setManualSaved] = useState(false);
+  const [manualSavedData, setManualSavedData] = useState(null);
 
   const resultToForm = (res) => ({
     merchant: res.merchant || "",
@@ -361,12 +363,23 @@ export default function UploadProcess({ onNavigate }) {
     setManualError("");
   };
 
+  const resetManual = () => {
+    setManualSaved(false);
+    setManualSavedData(null);
+    setManualForm(EMPTY_FORM);
+    setManualError("");
+    setManualMessage("");
+    setInputMethod("manual");
+  };
+
   const changeInputMethod = (method) => {
     setInputMethod(method);
     setManualError("");
     setManualMessage("");
     setSaveError("");
     setBatchSaveSummary(null);
+    setManualSaved(false);
+    setManualSavedData(null);
   };
 
   const handleDrop = (event) => {
@@ -541,8 +554,14 @@ export default function UploadProcess({ onNavigate }) {
         source: "manual",
         notes: manualForm.notes || "",
       });
-      setManualMessage("Transaksi berhasil disimpan.");
+      setManualSavedData({
+        merchant: manualForm.merchant.trim(),
+        amount,
+        date: manualForm.date,
+        category: manualForm.category,
+      });
       setManualForm(EMPTY_FORM);
+      setManualSaved(true);
     } catch (error) {
       setManualError(error.message || "Transaksi belum berhasil disimpan. Coba lagi sebentar.");
     } finally {
@@ -606,6 +625,22 @@ export default function UploadProcess({ onNavigate }) {
             </div>
             <div className="flex gap-3" style={{ justifyContent: "center" }}>
               <button className="btn btn-secondary" onClick={reset}>Upload Lagi</button>
+              <button className="btn btn-primary" onClick={() => onNavigate("history")}>
+                Lihat Riwayat
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </div>
+        ) : manualSaved && manualSavedData ? (
+          <div className="card card-body" style={{ maxWidth: 560, margin: "0 auto", textAlign: "center" }}>
+            <CheckCircle2 size={56} color="var(--color-success)" style={{ marginBottom: 14 }} />
+            <div className="card-title" style={{ marginBottom: 6 }}>Transaksi Tersimpan</div>
+            <div style={{ color: "var(--color-muted)", marginBottom: 8 }}>{manualSavedData.merchant}</div>
+            <div style={{ fontSize: 30, fontWeight: 850, color: "var(--color-primary)", marginBottom: 22 }}>
+              {formatRp(manualSavedData.amount)}
+            </div>
+            <div className="flex gap-3" style={{ justifyContent: "center" }}>
+              <button className="btn btn-secondary" onClick={resetManual}>Input Lagi</button>
               <button className="btn btn-primary" onClick={() => onNavigate("history")}>
                 Lihat Riwayat
                 <ArrowRight size={16} />
@@ -896,7 +931,6 @@ export default function UploadProcess({ onNavigate }) {
                     Gunakan input manual jika transaksi sulit terbaca atau ingin mencatat transaksi tanpa gambar.
                   </div>
 
-                  {manualMessage && <div className="alert alert-info mb-4">{manualMessage}</div>}
                   {manualError && <div className="alert alert-error mb-4">{manualError}</div>}
 
                   <div className="form-group">
