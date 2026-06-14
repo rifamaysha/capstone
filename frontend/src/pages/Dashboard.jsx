@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BarChart2,
@@ -10,7 +10,6 @@ import {
   Wallet,
   PiggyBank,
   BadgeDollarSign,
-  PencilLine,
   Plus,
   Trash2,
   ChevronDown,
@@ -335,6 +334,26 @@ export default function Dashboard({ onNavigate }) {
   };
 
   useEffect(() => { load(); }, []);
+
+  // Auto-refresh on tab focus / visibility — throttled to avoid hammering
+  // the backend on rapid focus changes (e.g. quick alt-tab).
+  const lastRefreshRef = useRef(Date.now());
+  useEffect(() => {
+    const MIN_INTERVAL_MS = 5_000;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastRefreshRef.current < MIN_INTERVAL_MS) return;
+      lastRefreshRef.current = now;
+      load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
 
   const saveEntries = (entries) => {
     setIncomeEntries(entries);
