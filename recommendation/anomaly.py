@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # producing false alarms on completely normal data.
 MIN_TRANSACTIONS_FOR_DETECTION = 10
 
+
+def _format_rp(n: float) -> str:
+    """Format number as 'Rp 1.234.567' (Indonesian thousand separator)."""
+    return f"Rp {int(round(n)):,}".replace(",", ".")
+
+
 # Internal category key → human-readable Indonesian label
 _CAT_DISPLAY: dict[str, str] = {
     "makanan_minuman": "Makanan & Minuman",
@@ -130,12 +136,12 @@ def _detect_in_group(
         if baseline_median > 0 and amt > baseline_median * 3:
             reason = (
                 f"Nominal jauh lebih tinggi dari pola {cat_label} "
-                f"(median Rp {baseline_median:,.0f})"
+                f"(median {_format_rp(baseline_median)})"
             )
         else:
             reason = (
                 f"Nominal di atas pola {cat_label} "
-                f"(median Rp {baseline_median:,.0f})"
+                f"(median {_format_rp(baseline_median)})"
             )
         tx_out["anomaly_reason"] = reason
         outliers.append(tx_out)
@@ -210,8 +216,8 @@ def detect_anomalies(
                 tx_out["baseline_mean"] = round(mean_amt, 2)
                 tx_out["baseline_scope"] = "rule_based"
                 tx_out["anomaly_reason"] = (
-                    f"Nominal Rp {amt:,.0f} jauh lebih tinggi dari rata-rata "
-                    f"transaksi lain (Rp {mean_amt:,.0f})"
+                    f"Nominal {_format_rp(amt)} jauh lebih tinggi dari rata-rata "
+                    f"transaksi lain ({_format_rp(mean_amt)})"
                 )
                 rule_anomalies.append(tx_out)
 
