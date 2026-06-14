@@ -39,6 +39,35 @@ def _cat_display(cat: str) -> str:
     return CATEGORY_DISPLAY.get(cat, cat.replace("_", " ").title())
 
 
+def _normalise_date(raw: str) -> str:
+    """Convert any common date format to YYYY-MM-DD for consistent sorting.
+
+    Handles: YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY, DD-MM-YYYY.
+    Returns the original 10-char slice unchanged if format is not recognised.
+    """
+    s = str(raw).strip()
+    if not s:
+        return ""
+    # Strip to at most 10 chars
+    s = s[:10]
+    if len(s) != 10:
+        return s
+    # Detect separator
+    sep = s[4] if s[4] in "-/" else (s[2] if s[2] in "-/" else None)
+    if sep is None:
+        return s
+    parts = s.replace("/", "-").split("-")
+    if len(parts) != 3:
+        return s
+    if len(parts[0]) == 4:
+        # Already YYYY-MM-DD or YYYY/MM/DD
+        return f"{parts[0]}-{parts[1]}-{parts[2]}"
+    if len(parts[2]) == 4:
+        # DD-MM-YYYY or DD/MM/YYYY → YYYY-MM-DD
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return s
+
+
 def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     transactions = get_all_transactions()
     txs = [t.model_dump() for t in transactions]
@@ -112,9 +141,10 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     try:
         from recommendation import analyze_budget, detect_anomalies, BUCKET_DISPLAY, IDEAL_RATIO
 
-        income = monthly_income if monthly_income > 0 else total_expense * 2
-        if income > 0:
-            budget_result = analyze_budget(txs, income)
+        # Only run budget analysis when real income data is available.
+        # Never fabricate income from spending figures — that produces misleading insights.
+        if monthly_income > 0:
+            budget_result = analyze_budget(txs, monthly_income)
             actual = budget_result.get("actual_ratio", {})
             ideal = budget_result.get("ideal_ratio", {})
             # Build bucket comparison for frontend
@@ -129,7 +159,7 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
             buckets["tabungan"]["actual"] = budget_result.get("tabungan", 0.0)
 
             budget_comparison = {
-                "monthly_income": income,
+                "monthly_income": monthly_income,
                 "total_spent": budget_result.get("total_spent", 0.0),
                 "buckets": buckets,
             }
@@ -153,7 +183,9 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     try:
         from recommendation import detect_anomalies
 
-        anomaly_results = detect_anomalies(txs, min_samples=1)
+        # min_samples=5 prevents categories with very few transactions from being
+        # aggressively flagged; small categories fall back to the global model.
+        anomaly_results = detect_anomalies(txs, min_samples=5)
         # detect_anomalies returns augmented transaction dicts (is_anomaly=True)
         # anomaly_score is from IsolationForest: more negative = more anomalous
         for result in anomaly_results:
@@ -182,12 +214,11 @@ def get_insights(monthly_income: float = 0.0) -> InsightResponse:
     except Exception as exc:
         logger.warning("Anomaly detection unavailable: %s", exc)
 
-    # Daily expense aggregation 
+    # Daily expense aggregation
     daily_map: dict[str, dict] = {}
     for t in txs:
         raw_date = t.get("date", "") or t.get("saved_at", "")[:10]
-        # Normalise to YYYY-MM-DD
-        day = str(raw_date).strip()[:10]
+        day = _normalise_date(str(raw_date))
         if not day:
             continue
         if day not in daily_map:

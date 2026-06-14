@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, BarChart2, PiggyBank, RefreshCw, Store, TrendingDown, Upload } from "lucide-react";
+import { AlertTriangle, BarChart2, LayoutDashboard, PiggyBank, RefreshCw, Store, TrendingDown, Upload } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -17,6 +17,19 @@ import MetricCard from "../components/MetricCard.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import { getInsights } from "../api/client.js";
 import { chartColors, metricTone } from "../styles/theme.js";
+
+// Same key used by Dashboard — single source of truth for income data
+const INCOME_STORAGE_KEY = "smart_expense_income_entries";
+
+function getTotalIncomeFromStorage() {
+  try {
+    const saved = localStorage.getItem(INCOME_STORAGE_KEY);
+    const entries = saved ? JSON.parse(saved) : [];
+    return entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  } catch {
+    return 0;
+  }
+}
 
 function formatRp(value) {
   return `Rp ${Number(value || 0).toLocaleString("id-ID")}`;
@@ -52,8 +65,7 @@ export default function Insights({ onNavigate }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [income, setIncome] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [totalIncome, setTotalIncome] = useState(getTotalIncomeFromStorage);
 
   const load = async (monthlyIncome = 0) => {
     setLoading(true);
@@ -68,16 +80,12 @@ export default function Insights({ onNavigate }) {
   };
 
   useEffect(() => {
-    load();
+    // Re-read income from localStorage on mount so Insights always reflects
+    // whatever was entered in Dashboard — no separate input needed here.
+    const income = getTotalIncomeFromStorage();
+    setTotalIncome(income);
+    load(income);
   }, []);
-
-  const handleIncome = async (event) => {
-    event.preventDefault();
-    const parsed = Number(String(income || "").replace(/[^\d.]/g, "")) || 0;
-    setSubmitting(true);
-    await load(parsed);
-    setSubmitting(false);
-  };
 
   const summary = data?.summary || {};
   const breakdown = data?.category_breakdown || [];
@@ -85,8 +93,8 @@ export default function Insights({ onNavigate }) {
   const toReview = data?.transactions_to_review || [];
   const budget = data?.budget_comparison || {};
   const hasData = (summary.transaction_count || 0) > 0;
-  const potentialSaving = budget.monthly_income > 0
-    ? Math.max(0, Number(budget.monthly_income) - Number(summary.total_expense || 0))
+  const potentialSaving = totalIncome > 0
+    ? Math.max(0, totalIncome - Number(summary.total_expense || 0))
     : 0;
 
   return (
@@ -97,7 +105,11 @@ export default function Insights({ onNavigate }) {
         actions={
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => load(Number(String(income || "").replace(/[^\d.]/g, "")) || 0)}
+            onClick={() => {
+              const income = getTotalIncomeFromStorage();
+              setTotalIncome(income);
+              load(income);
+            }}
             disabled={loading}
           >
             <RefreshCw size={15} />
@@ -129,32 +141,59 @@ export default function Insights({ onNavigate }) {
           </div>
         ) : (
           <>
-            <div className="card card-body section-gap">
-              <div className="card-title" style={{ fontSize: 18 }}>Pendapatan Bulanan</div>
-              <form onSubmit={handleIncome} style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div className="form-group" style={{ flex: "1 1 260px", marginBottom: 0 }}>
-                  <label className="form-label">Masukkan pendapatan bulanan (Rp)</label>
-                  <input
-                    className="form-input"
-                    value={income}
-                    onChange={(event) => setIncome(event.target.value)}
-                    placeholder="Contoh: 5000000"
-                    type="number"
-                    min="0"
-                  />
+            {/* Income info banner — read-only, sourced from Dashboard */}
+            {totalIncome > 0 ? (
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                flexWrap: "wrap", gap: 12,
+                background: "var(--color-success-soft)",
+                border: "1px solid #b6f0df",
+                borderRadius: "var(--radius)",
+                padding: "12px 18px",
+                marginBottom: 4,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <PiggyBank size={16} color="var(--color-success)" />
+                  <span style={{ fontSize: 14, color: "var(--color-success)", fontWeight: 600 }}>
+                    Pemasukan dari Dashboard:{" "}
+                    <strong>{formatRp(totalIncome)}</strong>
+                  </span>
                 </div>
-                <button className="btn btn-primary" type="submit" disabled={submitting}>
-                  {submitting ? (
-                    <>
-                      <span className="spinner" />
-                      Menghitung...
-                    </>
-                  ) : (
-                    "Hitung Budget"
-                  )}
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => onNavigate("dashboard")}
+                  style={{ fontSize: 13 }}
+                >
+                  <LayoutDashboard size={14} />
+                  Ubah di Dashboard
                 </button>
-              </form>
-            </div>
+              </div>
+            ) : (
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                flexWrap: "wrap", gap: 12,
+                background: "var(--color-primary-soft)",
+                border: "1px solid #d0ceff",
+                borderRadius: "var(--radius)",
+                padding: "12px 18px",
+                marginBottom: 4,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <PiggyBank size={16} color="var(--color-primary)" />
+                  <span style={{ fontSize: 14, color: "var(--color-primary)", fontWeight: 600 }}>
+                    Tambahkan pemasukan di Dashboard agar budget dan potensi hemat dapat dihitung.
+                  </span>
+                </div>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => onNavigate("dashboard")}
+                  style={{ fontSize: 13 }}
+                >
+                  <LayoutDashboard size={14} />
+                  Ke Dashboard
+                </button>
+              </div>
+            )}
 
             <div className="metric-grid">
               <MetricCard
@@ -171,7 +210,7 @@ export default function Insights({ onNavigate }) {
               />
               <MetricCard
                 label="Potensi Hemat"
-                value={budget.monthly_income > 0 ? formatRp(potentialSaving) : "-"}
+                value={totalIncome > 0 ? formatRp(potentialSaving) : "-"}
                 icon={PiggyBank}
                 {...metricTone.success}
               />
@@ -226,7 +265,7 @@ export default function Insights({ onNavigate }) {
                       innerRadius={52}
                       outerRadius={82}
                       paddingAngle={4}
-                      label={({ percentage }) => `${percentage}%`}
+                      label={({ percent }) => `${(percent * 100).toFixed(1)}%`}
                       labelLine={false}
                     >
                       {breakdown.map((_, index) => (
@@ -252,7 +291,8 @@ export default function Insights({ onNavigate }) {
                   const actual = Number(info?.actual_ratio || 0);
                   const ideal = Number(info?.ideal_ratio || 0);
                   const actualAmount = Number(info?.actual || 0);
-                  const over = ideal > 0 && actual > ideal;
+                  // For tabungan (savings), actual > ideal is good, not over-budget
+                  const over = key !== "tabungan" && ideal > 0 && actual > ideal;
                   const width = Math.min(100, ideal > 0 ? (actual / ideal) * 100 : 0);
                   return (
                     <div key={key} style={{ padding: "12px 0", borderBottom: index < Object.keys(budget.buckets).length - 1 ? "1px solid var(--color-border)" : "none" }}>
@@ -324,6 +364,11 @@ export default function Insights({ onNavigate }) {
                           <div style={{ color: "var(--color-muted)", fontSize: 13 }}>
                             {item.category_display} - {item.date || "-"}
                           </div>
+                          {item.anomaly_reason && (
+                            <div style={{ fontSize: 12, color: "var(--color-warning, #d97706)", marginTop: 2 }}>
+                              {item.anomaly_reason}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div style={{ fontWeight: 850, whiteSpace: "nowrap" }}>{formatRp(item.amount)}</div>
