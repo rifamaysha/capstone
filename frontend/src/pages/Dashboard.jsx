@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart2,
+  Calendar,
   RefreshCw,
   ShoppingBag,
   TrendingUp,
@@ -18,7 +19,10 @@ import {
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -64,6 +68,64 @@ function ChartTooltip({ active, payload, label }) {
       <div style={{ color: "var(--color-primary)", fontWeight: 800 }}>
         {formatRp(payload[0].value)}
       </div>
+    </div>
+  );
+}
+
+// ── Date helpers for trend chart ────────────────────────────────────────────
+function toYMD(date) {
+  // Format JS Date → "YYYY-MM-DD" using LOCAL time (avoids UTC off-by-one).
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function fromYMD(ymd) {
+  // Parse "YYYY-MM-DD" as local Date (new Date("YYYY-MM-DD") parses as UTC).
+  if (!ymd || ymd.length < 10) return null;
+  const [y, m, d] = ymd.slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function formatTickDate(ymd) {
+  const d = fromYMD(ymd);
+  if (!d) return ymd;
+  return d.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+}
+
+function TrendTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const item = payload[0].payload;
+  const d = fromYMD(item.date);
+  const label = d
+    ? d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short", year: "numeric" })
+    : item.date;
+  return (
+    <div style={{
+      background: "#fff",
+      border: "1px solid var(--color-border)",
+      borderRadius: 10,
+      padding: "10px 12px",
+      fontSize: 12,
+      boxShadow: "var(--shadow)",
+    }}>
+      <div style={{ fontWeight: 800, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: "var(--color-primary)", fontWeight: 800 }}>
+        {formatRp(item.total)}
+      </div>
+      {item.count > 0 && (
+        <div style={{ color: "var(--color-muted)", marginTop: 2 }}>
+          {item.count} transaksi
+        </div>
+      )}
     </div>
   );
 }
@@ -244,12 +306,19 @@ export default function Dashboard({ onNavigate }) {
   const [incomeEntries, setIncomeEntries] = useState(() => {
     try {
       const saved = localStorage.getItem(INCOME_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      // Bug fix: jika legacy localStorage menyimpan nilai non-array
+      // (mis. dulu hanya total income sebagai number), .reduce() akan crash.
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   });
   const [showIncomeModal, setShowIncomeModal] = useState(false);
+
+  // ── Trend date range state (default: 7 hari terakhir) ─────────────────────
+  const [trendStart, setTrendStart] = useState(() => toYMD(addDays(new Date(), -6)));
+  const [trendEnd, setTrendEnd] = useState(() => toYMD(new Date()));
 
   const totalIncome = incomeEntries.reduce((s, e) => s + e.amount, 0);
 
@@ -292,6 +361,49 @@ export default function Dashboard({ onNavigate }) {
   const rawUsedPercent = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : 0;
   const usedPercent = Math.min(100, rawUsedPercent); // capped for progress bar
   const isOverBudget = totalIncome > 0 && totalExpense > totalIncome;
+
+  // ── Trend chart data: filter daily_expenses ke range, isi tanggal kosong dengan 0 ──
+  const dailyExpenses = data?.daily_expenses || [];
+  const todayStr = toYMD(new Date());
+
+  const trendSeries = useMemo(() => {
+    const s = fromYMD(trendStart);
+    const e = fromYMD(trendEnd);
+    if (!s || !e) return [];
+    // Auto-swap kalau user pilih start > end
+    const [from, to] = s <= e ? [s, e] : [e, s];
+
+    // Map tanggal → {total, count} dari data backend
+    const map = new Map();
+    for (const item of dailyExpenses) {
+      map.set(item.date, {
+        total: Number(item.total) || 0,
+        count: Number(item.count) || 0,
+      });
+    }
+
+    // Generate setiap hari dalam range, fill 0 kalau tidak ada transaksi
+    const out = [];
+    for (let d = new Date(from); d <= to; d = addDays(d, 1)) {
+      const key = toYMD(d);
+      const hit = map.get(key);
+      out.push({
+        date: key,
+        total: hit?.total || 0,
+        count: hit?.count || 0,
+      });
+    }
+    return out;
+  }, [dailyExpenses, trendStart, trendEnd]);
+
+  const trendTotal = trendSeries.reduce((s, x) => s + x.total, 0);
+  const trendAvg = trendSeries.length > 0 ? trendTotal / trendSeries.length : 0;
+  const trendDaysWithSpending = trendSeries.filter((x) => x.total > 0).length;
+
+  const applyQuickRange = (days) => {
+    setTrendEnd(toYMD(new Date()));
+    setTrendStart(toYMD(addDays(new Date(), -(days - 1))));
+  };
 
   return (
     <>
@@ -504,6 +616,116 @@ export default function Dashboard({ onNavigate }) {
                 icon={TrendingUp}
                 {...metricTone.violet}
               />
+            </div>
+
+            {/* ── Tren Pengeluaran Harian ── */}
+            <div className="card card-body section-gap">
+              <div style={{
+                display: "flex", flexWrap: "wrap",
+                alignItems: "flex-start", justifyContent: "space-between",
+                gap: 16, marginBottom: 16,
+              }}>
+                <div>
+                  <div className="card-title" style={{ marginBottom: 4 }}>Tren Pengeluaran Harian</div>
+                  <div style={{ color: "var(--color-muted)", fontSize: 14 }}>
+                    Total pengeluaran per hari dalam rentang tanggal yang kamu pilih.
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => applyQuickRange(7)}>7 hari</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => applyQuickRange(14)}>14 hari</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => applyQuickRange(30)}>30 hari</button>
+                </div>
+              </div>
+
+              <div style={{
+                display: "flex", flexWrap: "wrap",
+                gap: 14, marginBottom: 18, alignItems: "center",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Calendar size={15} color="var(--color-muted)" />
+                  <span style={{ fontSize: 13, color: "var(--color-muted)", fontWeight: 600 }}>Dari</span>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={trendStart}
+                    max={todayStr}
+                    onChange={(e) => setTrendStart(e.target.value)}
+                    style={{ width: "auto", padding: "8px 10px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 13, color: "var(--color-muted)", fontWeight: 600 }}>Sampai</span>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={trendEnd}
+                    max={todayStr}
+                    onChange={(e) => setTrendEnd(e.target.value)}
+                    style={{ width: "auto", padding: "8px 10px" }}
+                  />
+                </div>
+              </div>
+
+              {trendSeries.length > 0 && trendTotal > 0 ? (
+                <>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={trendSeries} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 11, fill: "var(--color-muted)" }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={formatTickDate}
+                        interval="preserveStartEnd"
+                        minTickGap={24}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: "var(--color-muted)" }}
+                        tickLine={false} axisLine={false} width={56}
+                        tickFormatter={formatRpShort}
+                      />
+                      <Tooltip content={<TrendTooltip />} />
+                      <Line
+                        type="monotone"
+                        dataKey="total"
+                        stroke="var(--color-primary)"
+                        strokeWidth={2.5}
+                        dot={{ r: 3, fill: "var(--color-primary)" }}
+                        activeDot={{ r: 5 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+
+                  <div style={{
+                    display: "flex", flexWrap: "wrap", gap: 28,
+                    marginTop: 14, paddingTop: 14,
+                    borderTop: "1px solid var(--color-border)",
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: "var(--color-muted)", fontWeight: 600 }}>Total Periode</div>
+                      <div style={{ fontSize: 16, fontWeight: 850, marginTop: 2 }}>{formatRp(trendTotal)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, color: "var(--color-muted)", fontWeight: 600 }}>Rata-rata / hari</div>
+                      <div style={{ fontSize: 16, fontWeight: 850, marginTop: 2 }}>{formatRp(trendAvg)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, color: "var(--color-muted)", fontWeight: 600 }}>Hari Berbelanja</div>
+                      <div style={{ fontSize: 16, fontWeight: 850, marginTop: 2 }}>
+                        {trendDaysWithSpending} dari {trendSeries.length} hari
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div style={{
+                  padding: "44px 20px", textAlign: "center",
+                  color: "var(--color-muted)", fontSize: 14,
+                }}>
+                  Tidak ada pengeluaran pada rentang tanggal ini.
+                </div>
+              )}
             </div>
 
             <div className="two-col section-gap">
