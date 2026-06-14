@@ -22,6 +22,12 @@ from sklearn.ensemble import IsolationForest
 
 logger = logging.getLogger(__name__)
 
+# Minimum total transactions required before anomaly detection runs.
+# Below this, the median/mean baseline is too unstable — IsolationForest is
+# forced to flag at least one item (because contamination clamps to 1/n),
+# producing false alarms on completely normal data.
+MIN_TRANSACTIONS_FOR_DETECTION = 10
+
 # Internal category key → human-readable Indonesian label
 _CAT_DISPLAY: dict[str, str] = {
     "makanan_minuman": "Makanan & Minuman",
@@ -105,6 +111,14 @@ def _detect_in_group(
         if pred != -1:
             continue
         amt = float(tx.get("amount") or 0)
+
+        # Only flag transactions that are unusually HIGH.
+        # IsolationForest also flags transactions that are unusually LOW
+        # (e.g. a Rp 25rb coffee when the median is Rp 19jt) — but those are
+        # almost never the user's "suspicious" intent. We skip them.
+        if baseline_median > 0 and amt <= baseline_median:
+            continue
+
         tx_out = dict(tx)
         tx_out["anomaly_score"]    = float(score)
         tx_out["is_anomaly"]       = True
@@ -112,20 +126,15 @@ def _detect_in_group(
         tx_out["baseline_mean"]    = round(baseline_mean, 2)
         tx_out["baseline_scope"]   = scope
 
-        # User-friendly Indonesian reason
+        # User-friendly Indonesian reason (only HIGH-value variants now)
         if baseline_median > 0 and amt > baseline_median * 3:
             reason = (
                 f"Nominal jauh lebih tinggi dari pola {cat_label} "
                 f"(median Rp {baseline_median:,.0f})"
             )
-        elif baseline_median > 0 and amt > 0 and amt < baseline_median / 3:
-            reason = (
-                f"Nominal jauh lebih rendah dari pola {cat_label} "
-                f"(median Rp {baseline_median:,.0f})"
-            )
         else:
             reason = (
-                f"Nominal berbeda signifikan dari pola {cat_label} "
+                f"Nominal di atas pola {cat_label} "
                 f"(median Rp {baseline_median:,.0f})"
             )
         tx_out["anomaly_reason"] = reason
@@ -168,36 +177,42 @@ def detect_anomalies(
         if float(t.get("amount") or 0) > 0
     ]
 
-    if len(valid) < 2:
-        # ---- Rule-based fallback: flag if amount > 5x the single other tx ----
-        if len(valid) == 1:
-            return []
+    # ---- 1a. Minimum sample size guard ----
+    # With too few transactions, the algorithm produces unreliable results:
+    #   - IsolationForest is forced to flag ~1/n transactions due to
+    #     contamination clamping, creating false alarms on normal data
+    #   - The median/mean baseline shifts dramatically per transaction
+    # Better to show nothing than show misleading "anomalies".
+    if len(valid) < MIN_TRANSACTIONS_FOR_DETECTION:
+        logger.info(
+            "Skipping anomaly detection: %d valid transactions (need >= %d)",
+            len(valid), MIN_TRANSACTIONS_FOR_DETECTION,
+        )
         return []
 
-    # ---- 1b. Rule-based detection: always run regardless of sample size ----
-    # Flag any transaction that is > 3x the mean of ALL transactions.
-    # This catches obvious outliers (e.g. IBox 7jt when others are 34rb) even
-    # when Isolation Forest can't fit due to small sample size.
+    # ---- 1b. Rule-based: catch obvious "way too big" transactions ----
+    # Flag any transaction whose amount is > 3x the overall mean. Always
+    # runs alongside IsolationForest as a safety net for clear outliers.
     amounts = [float(t.get("amount") or 0) for t in valid]
     mean_amt = sum(amounts) / len(amounts)
-    rule_flagged_ids: set = set()
     rule_anomalies: list[dict[str, Any]] = []
 
     if mean_amt > 0:
+        sorted_amounts = sorted(amounts)
+        median_amt = sorted_amounts[len(amounts) // 2]
         for t in valid:
             amt = float(t.get("amount") or 0)
             if amt > mean_amt * 3:
                 tx_out = dict(t)
                 tx_out["anomaly_score"] = -0.6
                 tx_out["is_anomaly"] = True
-                tx_out["baseline_median"] = sorted(amounts)[len(amounts) // 2]
+                tx_out["baseline_median"] = median_amt
                 tx_out["baseline_mean"] = round(mean_amt, 2)
                 tx_out["baseline_scope"] = "rule_based"
                 tx_out["anomaly_reason"] = (
                     f"Nominal Rp {amt:,.0f} jauh lebih tinggi dari rata-rata "
                     f"transaksi lain (Rp {mean_amt:,.0f})"
                 )
-                rule_flagged_ids.add(t.get("id"))
                 rule_anomalies.append(tx_out)
 
     if not by_category:
@@ -248,24 +263,41 @@ def detect_anomalies(
 
 # Quick inline self-test — only runs when script is executed directly
 if __name__ == "__main__":
+    # Test 1: with >= 10 transactions, the high outlier should be flagged.
     _synthetic = [
         {"amount": 25000, "category": "makanan_minuman"},
         {"amount": 27000, "category": "makanan_minuman"},
         {"amount": 30000, "category": "makanan_minuman"},
         {"amount": 28000, "category": "makanan_minuman"},
         {"amount": 26000, "category": "makanan_minuman"},
-        {"amount": 250000, "category": "makanan_minuman"},  # outlier
+        {"amount": 24000, "category": "makanan_minuman"},
+        {"amount": 29000, "category": "makanan_minuman"},
+        {"amount": 31000, "category": "makanan_minuman"},
+        {"amount": 23000, "category": "makanan_minuman"},
+        {"amount": 250000, "category": "makanan_minuman"},  # high outlier
     ]
     results = detect_anomalies(_synthetic, min_samples=4)
     outlier_amounts = [r["amount"] for r in results]
     assert 250000 in outlier_amounts, f"Expected 250000 flagged, got {outlier_amounts}"
-    normal_flagged = [a for a in outlier_amounts if a != 250000]
-    print(f"[SELF-TEST] outliers={outlier_amounts}  normal_flagged={normal_flagged}")
+    # Low values must NEVER be flagged
+    low_flagged = [a for a in outlier_amounts if a < 28000]
+    assert not low_flagged, f"Low values should not be flagged: {low_flagged}"
+    print(f"[SELF-TEST] outliers={outlier_amounts}")
     for r in results:
         print(f"  amount={r['amount']}  score={r['anomaly_score']:.4f}  reason={r['anomaly_reason']}")
+
+    # Test 2: small dataset (< 10) returns empty — no false alarms
+    _small = [
+        {"amount": 2_400_000, "category": "makanan_minuman", "id": 1},
+        {"amount": 30_000_000, "category": "belanja", "id": 2},
+        {"amount": 19_000_000, "category": "makanan_minuman", "id": 3},
+    ]
+    small_results = detect_anomalies(_small)
+    assert small_results == [], f"Expected no anomalies for <10 txs, got {small_results}"
+    print(f"[SELF-TEST] small dataset (n=3) → no false alarms ✓")
 
     # Edge cases
     assert detect_anomalies([]) == []
     assert detect_anomalies([{"amount": 0}]) == []
-    assert detect_anomalies([{"amount": 100}]) == []   
+    assert detect_anomalies([{"amount": 100}]) == []
     print("[SELF-TEST] Edge cases passed.")
