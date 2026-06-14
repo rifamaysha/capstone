@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   BarChart2,
   RefreshCw,
   ShoppingBag,
@@ -288,7 +289,8 @@ export default function Dashboard({ onNavigate }) {
 
   const totalExpense = Number(summary.total_expense || 0);
   const remainingBalance = totalIncome > 0 ? Math.max(0, totalIncome - totalExpense) : null;
-  const usedPercent = totalIncome > 0 ? Math.min(100, Math.round((totalExpense / totalIncome) * 100)) : 0;
+  const rawUsedPercent = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : 0;
+  const usedPercent = Math.min(100, rawUsedPercent); // capped for progress bar
   const isOverBudget = totalIncome > 0 && totalExpense > totalIncome;
 
   return (
@@ -391,7 +393,9 @@ export default function Dashboard({ onNavigate }) {
                       fontSize: 13, fontWeight: 600, marginBottom: 2,
                       color: isOverBudget ? "var(--color-danger)" : "var(--color-success)",
                     }}>
-                      {isOverBudget ? "⚠️ Pengeluaran Melebihi Pemasukan!" : "💰 Sisa Uang Kamu"}
+                      {isOverBudget
+                        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><AlertTriangle size={13} />Pengeluaran Melebihi Pemasukan!</span>
+                        : <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Wallet size={13} />Sisa Uang Kamu</span>}
                     </div>
                     <div style={{
                       fontSize: 26, fontWeight: 900, letterSpacing: "-0.5px",
@@ -423,7 +427,7 @@ export default function Dashboard({ onNavigate }) {
                   </div>
                   <div style={{ fontSize: 12, color: "var(--color-muted)", marginTop: 4 }}>
                     {isOverBudget
-                      ? `Kelebihan ${usedPercent - 100}% dari pemasukan`
+                      ? `Kelebihan ${rawUsedPercent - 100}% dari pemasukan`
                       : `Sisa ${100 - usedPercent}% belum terpakai`}
                   </div>
                 </div>
