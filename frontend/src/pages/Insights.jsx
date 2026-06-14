@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, BarChart2, LayoutDashboard, PiggyBank, RefreshCw, Store, TrendingDown, Upload } from "lucide-react";
 import {
   Bar,
@@ -25,7 +25,9 @@ function getTotalIncomeFromStorage() {
   try {
     const saved = localStorage.getItem(INCOME_STORAGE_KEY);
     const entries = saved ? JSON.parse(saved) : [];
-    return entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    // Defensive: ignore corrupt/legacy non-array data instead of crashing.
+    if (!Array.isArray(entries)) return 0;
+    return entries.reduce((s, e) => s + (Number(e?.amount) || 0), 0);
   } catch {
     return 0;
   }
@@ -85,6 +87,29 @@ export default function Insights({ onNavigate }) {
     const income = getTotalIncomeFromStorage();
     setTotalIncome(income);
     load(income);
+  }, []);
+
+  // Auto-refresh when the user returns to the tab (e.g. after switching
+  // browser windows or coming back from another app). Throttled so we
+  // don't hammer the backend on rapid focus changes.
+  const lastRefreshRef = useRef(Date.now());
+  useEffect(() => {
+    const MIN_INTERVAL_MS = 5_000;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastRefreshRef.current < MIN_INTERVAL_MS) return;
+      lastRefreshRef.current = now;
+      const income = getTotalIncomeFromStorage();
+      setTotalIncome(income);
+      load(income);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, []);
 
   const summary = data?.summary || {};
@@ -285,8 +310,15 @@ export default function Insights({ onNavigate }) {
 
             {budget.buckets && (
               <div className="card card-body section-gap">
-                <div className="card-title">Perbandingan Budget Bulanan</div>
-                <div className="card-subtitle">Kebutuhan, keinginan, dan tabungan dibandingkan dengan pendapatan bulanan.</div>
+                <div className="card-title">
+                  Perbandingan Budget {budget.period_label || "Bulanan"}
+                </div>
+                <div className="card-subtitle">
+                  Kebutuhan, keinginan, dan tabungan dibandingkan dengan pendapatan bulanan
+                  {typeof budget.month_transaction_count === "number" && (
+                    <> — dari <strong>{budget.month_transaction_count}</strong> transaksi bulan ini.</>
+                  )}
+                </div>
                 {Object.entries(budget.buckets).map(([key, info], index) => {
                   const actual = Number(info?.actual_ratio || 0);
                   const ideal = Number(info?.ideal_ratio || 0);
@@ -374,8 +406,29 @@ export default function Insights({ onNavigate }) {
                       <div style={{ fontWeight: 850, whiteSpace: "nowrap" }}>{formatRp(item.amount)}</div>
                     </div>
                   ))
+                ) : (summary.transaction_count || 0) < 10 ? (
+                  <div style={{
+                    padding: "20px 16px",
+                    background: "var(--color-primary-soft)",
+                    borderRadius: "var(--radius)",
+                    border: "1px solid #d0ceff",
+                    color: "var(--color-primary)",
+                    fontSize: 13.5,
+                    lineHeight: 1.55,
+                  }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      Belum cukup data untuk deteksi
+                    </div>
+                    <div>
+                      Butuh minimal <strong>10 transaksi</strong> agar pola pengeluaran bisa
+                      dianalisis. Saat ini ada <strong>{summary.transaction_count || 0} transaksi</strong>.
+                      Tambah {Math.max(0, 10 - (summary.transaction_count || 0))} transaksi lagi untuk mengaktifkan fitur ini.
+                    </div>
+                  </div>
                 ) : (
-                  <div style={{ color: "var(--color-muted)" }}>Tidak ada transaksi yang perlu dicek.</div>
+                  <div style={{ color: "var(--color-muted)" }}>
+                    Tidak ada transaksi yang nominalnya tidak biasa — pola pengeluaranmu konsisten. 👍
+                  </div>
                 )}
               </div>
             </div>
