@@ -19,6 +19,7 @@ from .schemas import (
     TransactionCreate,
     TransactionListResponse,
     TransactionOut,
+    TransactionUpdate,
 )
 from .services import extraction_service, insight_service, transaction_service
 
@@ -139,6 +140,22 @@ def create_transaction(payload: TransactionCreate) -> TransactionOut:
     except Exception as exc:
         logger.exception("Failed to save transaction: %s", exc)
         raise HTTPException(status_code=500, detail="Gagal menyimpan transaksi.")
+
+
+@app.patch("/transactions/{transaction_id}", response_model=TransactionOut)
+def update_transaction(transaction_id: int, payload: TransactionUpdate) -> TransactionOut:
+    try:
+        return transaction_service.update_transaction_category(transaction_id, payload.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.delete("/transactions/{transaction_id}")
+def delete_transaction(transaction_id: int) -> dict:
+    try:
+        return transaction_service.delete_transaction_by_id(transaction_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.delete("/transactions")
