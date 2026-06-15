@@ -41,13 +41,16 @@ def _current_month_label(now: datetime | None = None) -> str:
 def _is_current_month(tx: dict, prefix: str) -> bool:
     """Check if a transaction belongs to the given YYYY-MM month.
 
-    Tries the user-visible `date` field first, falls back to `saved_at`
-    so transactions without an extracted date are still counted (using
-    the time they were saved, which is the user's recent activity).
+    Uses the transaction date field (normalized to YYYY-MM-DD first so
+    DD/MM/YYYY receipts are handled correctly). Falls back to saved_at
+    only when the date field is completely absent — never when the date
+    exists but belongs to a different month.
     """
     raw = (tx.get("date") or "").strip()
-    if len(raw) >= 7 and raw[:7] == prefix:
-        return True
+    if raw:
+        normalized = _normalise_date(raw)
+        return len(normalized) >= 7 and normalized[:7] == prefix
+    # No date extracted at all → fall back to when it was saved
     saved = (tx.get("saved_at") or "")[:7]
     return saved == prefix
 
