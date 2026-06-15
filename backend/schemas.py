@@ -40,6 +40,21 @@ class ExtractionResponse(BaseModel):
     debug_trace: str = ""
 
 
+class TransactionUpdate(BaseModel):
+    category: str
+
+    @field_validator("category")
+    @classmethod
+    def category_valid(cls, v: str) -> str:
+        valid = {
+            "makanan_minuman", "transportasi", "belanja", "hiburan",
+            "kesehatan", "pendidikan", "tagihan", "lainnya",
+        }
+        if v not in valid:
+            raise ValueError(f"kategori tidak valid: {v}")
+        return v
+
+
 class TransactionCreate(BaseModel):
     merchant: str
     amount: float
