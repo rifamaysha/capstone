@@ -61,6 +61,16 @@ export const saveTransaction = (payload) =>
     body: JSON.stringify(payload),
   });
 
+export const updateTransactionCategory = (id, category) =>
+  _fetch(`/transactions/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category }),
+  });
+
+export const deleteTransactionById = (id) =>
+  _fetch(`/transactions/${id}`, { method: "DELETE" });
+
 export const deleteTransactions = () =>
   _fetch("/transactions", { method: "DELETE" });
 
