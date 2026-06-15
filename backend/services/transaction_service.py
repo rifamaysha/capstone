@@ -96,6 +96,25 @@ def save_transaction(payload: TransactionCreate) -> TransactionOut:
     return _to_out(record)
 
 
+def update_transaction_category(transaction_id: int, category: str) -> TransactionOut:
+    transactions = _load_raw()
+    for t in transactions:
+        if t.get("id") == transaction_id:
+            t["category"] = category
+            _save_raw(transactions)
+            return _to_out(t)
+    raise ValueError(f"Transaksi dengan id {transaction_id} tidak ditemukan.")
+
+
+def delete_transaction_by_id(transaction_id: int) -> dict[str, str]:
+    transactions = _load_raw()
+    filtered = [t for t in transactions if t.get("id") != transaction_id]
+    if len(filtered) == len(transactions):
+        raise ValueError(f"Transaksi dengan id {transaction_id} tidak ditemukan.")
+    _save_raw(filtered)
+    return {"message": f"Transaksi {transaction_id} berhasil dihapus."}
+
+
 def delete_all_transactions() -> dict[str, str]:
     _save_raw([])
     return {"message": "Semua transaksi berhasil dihapus."}
