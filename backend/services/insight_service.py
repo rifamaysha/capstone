@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from datetime import datetime
 from typing import Any
@@ -36,6 +37,15 @@ def _current_month_label(now: datetime | None = None) -> str:
     """Return human-readable month label like 'Juni 2026'."""
     now = now or datetime.now()
     return f"{_INDO_MONTHS[now.month]} {now.year}"
+
+
+def _month_label(prefix: str) -> str:
+    """'2026-06' → 'Juni 2026'."""
+    try:
+        year, month = int(prefix[:4]), int(prefix[5:7])
+        return f"{_INDO_MONTHS[month]} {year}"
+    except (ValueError, IndexError, TypeError):
+        return prefix
 
 
 def _is_current_month(tx: dict, prefix: str) -> bool:
@@ -105,9 +115,18 @@ def _normalise_date(raw: str) -> str:
     return s
 
 
-def get_insights(monthly_income: float = 0.0) -> InsightResponse:
+def get_insights(monthly_income: float = 0.0, month: str = "") -> InsightResponse:
     transactions = get_all_transactions()
-    txs = [t.model_dump() for t in transactions]
+    all_txs = [t.model_dump() for t in transactions]
+
+    # Determine which month to show
+    if month and re.match(r"^\d{4}-\d{2}$", month):
+        month_prefix = month
+    else:
+        month_prefix = _current_month_prefix()
+
+    # Filter to selected month for all insight calculations
+    txs = [t for t in all_txs if _is_current_month(t, month_prefix)]
 
     if not txs:
         return InsightResponse(
