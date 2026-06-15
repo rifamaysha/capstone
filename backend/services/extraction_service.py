@@ -1,4 +1,4 @@
-﻿"""Extraction service â€” wraps existing OCR/parser modules for FastAPI.
+"""Extraction service â€” wraps existing OCR/parser modules for FastAPI.
 
 Intentionally minimal: reuses MBankingParser, ReceiptParser,
 extraction_postprocessor.postprocess, and HybridCategoryClassifier without
@@ -114,66 +114,99 @@ _RC_STRONG = frozenset({
 })
 
 _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    # Order matters: more specific / less ambiguous categories first so substring
-    # matches (e.g. "wifi" → tagihan) win before generic food/venue terms.
+    # Order matters: first match wins. Specific/unambiguous categories first.
+    # makanan_minuman comes before transportasi so "grab food" / "grabfood"
+    # hits food before the generic "grab" keyword in transportasi.
     ("tagihan", (
-        # Generic utility/bill terms
         "tagihan", "bill", "bills", "utility", "utilities",
         "langganan", "subscription", "membership", "member", "monthly",
-        "insurance", "asuransi",
-        # Indonesian utility categories (PLN/Telkom are utility-class, not generic brand).
-        # "air" and "water" are intentionally NOT included: they collide with
-        # beverage merchants like "AIR MINERAL". "pdam" remains because it is
-        # an Indonesian water-utility-specific term with no beverage collision.
-        "pln", "listrik", "electricity", "pdam",
-        "internet", "wifi", "pulsa", "paket data", "telkom",
+        "insurance", "asuransi", "cicilan", "angsuran",
+        # "air" / "water" intentionally excluded — collides with AIR MINERAL merchants
+        "pln", "listrik", "electricity", "pdam", "token listrik",
+        "internet", "wifi", "pulsa", "paket data",
+        "telkom", "telkomsel", "indihome", "xl", "axis", "indosat",
+        "simpati", "by.u", "tri", "smartfren", "firstmedia", "myrepublic",
+        "biznet", "kartu halo",
+        "bpjs", "gobills", "gopay bills",
     )),
     ("kesehatan", (
-        "dokter", "doctor", "klinik", "clinic", "apotek", "pharmacy",
+        "dokter", "doctor", "klinik", "clinic", "apotek", "apotik", "pharmacy",
         "dental", "dentist", "hospital", "rumah sakit",
-        "medical", "obat", "medicine", "lab", "laboratory",
+        "medical", "obat", "medicine", "lab", "laboratorium", "laboratory",
+        "puskesmas", "optik", "optic", "fisioterapi", "poli ",
+        "halodoc", "alodokter", "kimia farma", "kimiafarma", "k24", "guardian",
     )),
     ("pendidikan", (
         "sekolah", "school", "kampus", "campus", "university", "universitas",
         "course", "kursus", "class", "kelas", "training", "bootcamp",
-        "education", "pendidikan", "tuition", "les",
+        "education", "pendidikan", "tuition", "les", "bimbel",
+        "privat", "tutor", "edukasi", "academy",
+    )),
+    ("makanan_minuman", (
+        # Food delivery apps — must come before transportasi so "grab food" /
+        # "grabfood" wins over the generic "grab" keyword in that category
+        "gofood", "grabfood", "grab food", "shopeefood", "shopee food", "goeat",
+        # Generic food/drink terms
+        "food", "drink", "beverage", "makanan", "minuman", "meal", "snack",
+        "kitchen", "dessert", "catering", "eatery", "dining",
+        # Venue types
+        "cafe", "kafe", "coffee", "kopi", "warkop", "resto", "restaurant",
+        "restoran", "warung", "warteg", "kedai", "kantin", "rumah makan",
+        "depot", "dapur", "waroenk",
+        # Bakery / pastry
+        "bakery", "bakeri", "bread", "roti", "cake", "cakes", "donut",
+        # International fast food chains
+        "mcdonald", "mc donald", "kfc", "kentucky", "pizza hut", "burger king",
+        "starbuck", "j.co", "jco", "chatime", "breadtalk", "hokben",
+        "yoshinoya", "marugame", "gyu-kaku", "ichiban sushi",
+        # Indonesian food chains & brands
+        "mie gacoan", "geprek", "mixue", "sour sally", "es teler",
+        # Common Indonesian food types
+        "nasi", "mie", "mi", "ayam", "bakso", "bakmi", "sop", "soto", "sate",
+        "seafood", "ikan", "daging", "sayur", "tahu", "tempe", "gado", "ketoprak",
+        "bubur", "rendang", "padang", "rawon", "pecel", "siomay", "lontong",
+        "ketupat", "batagor", "kwetiau", "pempek", "mpek", "coto", "martabak",
+        "terang bulan", "molen", "takoyaki", "gorengan", "cilok", "cireng", "lalapan",
+        "kue", "jajan",
+        # Drinks
+        "juice", "jus", "milk", "susu", "smoothie", "boba", "bubble tea",
+        "teh", "matcha", "es krim", "ice cream", "gelato", "mochi",
+        "pocari", "aqua", "cimory", "aice",
+        # Menu-item nouns
+        "chicken", "beef", "fish", "pork", "burger", "pizza", "sandwich",
+        "ramen", "sushi", "curry", "noodle", "dimsum", "shawarma", "kebab",
+        "waffle", "pancake", "crepe",
     )),
     ("transportasi", (
         "transport", "transportation", "parkir", "parking", "tol", "toll",
-        "spbu", "fuel", "bensin", "taxi", "taksi", "ride", "travel",
-        "train", "kereta", "bus",
+        "spbu", "fuel", "bensin", "bbm", "pertamina", "shell", "vivo",
+        "taxi", "taksi", "ride", "travel", "kereta", "bus",
+        "gojek", "goride", "gocar", "grab", "grabcar", "grabbike",
+        "indriver", "maxim", "ojek", "blue bird", "bluebird",
+        "rental", "sewa kendaraan",
+        "pesawat", "tiket pesawat", "kereta api", "kai", "damri",
+        "pelni", "ferry", "airport",
     )),
     ("hiburan", (
         "hiburan", "entertainment", "wisata", "movie", "cinema", "bioskop",
         "game", "games", "ticket", "tiket", "karaoke", "event",
         "konser", "concert", "museum", "streaming",
+        "gym", "fitness", "sport", "olahraga", "yoga", "pilates",
+        "spa", "salon", "barbershop", "barber",
+        "hotel", "penginapan", "hostel", "airbnb",
+        "taman ", "wahana", "resort", "villa",
+        "netflix", "spotify", "youtube premium", "disney", "vidio", "mola",
+        "laundry", "dry clean", "laundromat", "cuci ",
     )),
     ("belanja", (
-        # Generic retail terms (no specific marketplace/minimart brand names)
         "shop", "store", "toko", "retail", "market", "supermarket", "minimarket",
         "groceries", "grocery", "mall", "fashion", "clothing", "shoes",
-        "aksesoris", "accessories",
+        "aksesoris", "accessories", "swalayan",
+        "alfamart", "indomaret", "alfamidi", "hypermart", "carrefour",
+        "giant", "lottemart", "transmart",
+        "shopee", "tokopedia", "lazada", "blibli", "bukalapak",
+        "matahari", "ramayana", "metro", "centro",
     )),
-    ("makanan_minuman", (
-        # Generic food/drink terms (English + Indonesian)
-        "food", "drink", "beverage", "makanan", "minuman", "meal", "snack",
-        "kitchen", "dessert",
-        # Generic venue terms
-        "cafe", "coffee", "kopi", "resto", "restaurant", "restoran",
-        "warung", "kedai", "kantin", "rumah makan", "rm",
-        # Bakery / pastry — common categories
-        "bakery", "bread", "roti", "cake", "cakes",
-        # Common Indonesian food types (general, not brand/menu)
-        "nasi", "mie", "ayam", "bakso", "sop", "soto", "sate", "seafood",
-        # Generic drink terms
-        "juice", "milk", "smoothie",
-        # Common menu-item nouns (general food domain, helpful when receipt items
-        # are visible but merchant header is unreadable — receipts may contain
-        # these in their item lines and warrant the makanan_minuman category).
-        "chicken", "beef", "fish", "pork", "burger", "pizza", "sandwich",
-        "ramen", "sushi", "curry", "noodle",
-    )),
-    ("lainnya", ("laundry", "dry clean", "laundromat")),
 )
 
 _POPULAR_MERCHANTS = (
@@ -700,9 +733,17 @@ def extract_from_image(image_path: Path, selected_type: str) -> dict[str, Any]:
             if raw_text:
                 cat_result["confidence"] = min(cat_result["confidence"], 0.42)
         else:
-            # Screenshot with no merchant: raw OCR is dominated by bank/acquirer noise
-            cat_result = {"label": "lainnya", "confidence": 0.0}
-            cat_source = "screenshot_no_merchant"
+            # Screenshot with no merchant: try keyword scan on raw OCR text first.
+            # Bank UI adds noise but specific brand keywords (gofood, grabfood, etc.)
+            # are distinctive enough to trust; skip ML to avoid noise amplification.
+            kw_result = _keyword_category(raw_text or "")
+            if kw_result:
+                cat_result = kw_result
+                cat_result["confidence"] = min(cat_result["confidence"], 0.55)
+                cat_source = "screenshot_raw_keyword"
+            else:
+                cat_result = {"label": "lainnya", "confidence": 0.0}
+                cat_source = "screenshot_no_merchant"
     category     = cat_result["label"]
     cat_conf     = cat_result["confidence"]
     stage_times["category"] = time.perf_counter() - category_started
