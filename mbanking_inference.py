@@ -94,6 +94,9 @@ _RECIPIENT_KEYWORDS = [
     "bayar ke", "bayar kepada", "nama toko", "nama merchant",
     "merchant name", "tujuan transfer", "beneficiary",
     "nama usaha", "diterima oleh", "pembayaran ke", "payment to",
+    # Transfer/bank patterns
+    "transfer ke", "kirim ke", "nama rekening", "atas nama", "nama akun",
+    "pemilik rekening",
 ]
 
 _MERCHANT_CONTEXT_KEYWORDS = [
@@ -333,16 +336,32 @@ _LABEL_BLACKLIST = {
     "qris payment successful", "transaction details",
     # Single tokens that are always UI labels
     "transfer", "debit", "kredit",
+    # Common banking tab / menu labels
+    "tabungan", "deposito", "giro", "rekening", "simpanan",
+    "notifikasi", "beranda", "home", "mutasi", "history",
+    "transfer uang", "bayar tagihan", "isi ulang", "tarik tunai",
+    "info rekening", "profil", "pengaturan", "settings",
+    # Transaction status words
+    "menunggu", "pending", "gagal", "failed", "expired",
 }
 
 _BANK_STATUS_NAMES = {
-    "bca", "bank bca", "bank jago", "seabank", "bank mandiri", "bni",
+    # Banks
+    "bca", "bank bca", "bank jago", "jago", "seabank", "bank mandiri", "bni",
     "bri", "btn", "cimb", "permata", "maybank", "ocbc", "danamon",
+    "bsi", "bank bsi", "bank neo", "neo commerce", "krom", "krom bank",
+    "motion bank", "amar bank", "tunaiku", "bank ina", "bank raya",
+    "bank muamalat", "muamalat", "bank mega", "mega", "bank bukopin", "bukopin",
+    "bank panin", "panin", "jenius", "btpn",
+    # E-wallets / payment apps
     "shopeepay", "gopay", "dana", "ovo", "linkaja", "blu",
+    "sakuku", "flip", "payfazz",
+    # Status / UI strings
     "qris payment successful", "pembayaran berhasil", "transaction details",
     "rincian pembayaran", "rincian transaksi",
-    # Payment acquirers / gateways — never a valid merchant name
+    # Payment acquirers / gateways
     "xendit", "midtrans", "doku", "nicepay", "faspay", "ipaymu", "tripay",
+    "espay", "finpay",
 }
 
 _CITY_ONLY_SET: frozenset[str] = frozenset({
@@ -727,34 +746,60 @@ def _merge_split_amounts(lines: list[str]) -> list[str]:
 # Map visible category labels in banking app UIs → internal category keys
 _SCREENSHOT_CATEGORY_MAP: dict[str, str] = {
     # English labels (Bank Jago, SeaBank, etc.)
-    "shopping":        "belanja",
-    "groceries":       "makanan_minuman",
-    "grocery":         "makanan_minuman",
-    "food":            "makanan_minuman",
-    "food & drink":    "makanan_minuman",
-    "food and drink":  "makanan_minuman",
-    "food & beverage": "makanan_minuman",
-    "restaurant":      "makanan_minuman",
-    "transport":       "transportasi",
-    "transportation":  "transportasi",
-    "travel":          "transportasi",
-    "bill":            "tagihan",
-    "bills":           "tagihan",
-    "utilities":       "tagihan",
-    "entertainment":   "hiburan",
-    "health":          "kesehatan",
-    "healthcare":      "kesehatan",
-    "education":       "pendidikan",
-    # Indonesian labels
-    "belanja":         "belanja",
-    "makanan":         "makanan_minuman",
-    "makan & minum":   "makanan_minuman",
-    "makanan & minuman": "makanan_minuman",
-    "transportasi":    "transportasi",
-    "tagihan":         "tagihan",
-    "hiburan":         "hiburan",
-    "kesehatan":       "kesehatan",
-    "pendidikan":      "pendidikan",
+    "shopping":                   "belanja",
+    "retail":                     "belanja",
+    "fashion":                    "belanja",
+    "clothing":                   "belanja",
+    "groceries":                  "makanan_minuman",
+    "grocery":                    "makanan_minuman",
+    "food":                       "makanan_minuman",
+    "food & drink":               "makanan_minuman",
+    "food and drink":             "makanan_minuman",
+    "food & drinks":              "makanan_minuman",
+    "food & beverage":            "makanan_minuman",
+    "food & beverages":           "makanan_minuman",
+    "food and beverage":          "makanan_minuman",
+    "restaurant":                 "makanan_minuman",
+    "dining":                     "makanan_minuman",
+    "transport":                  "transportasi",
+    "transportation":             "transportasi",
+    "travel":                     "transportasi",
+    "transport & travel":         "transportasi",
+    "transport & mobility":       "transportasi",
+    "bill":                       "tagihan",
+    "bills":                      "tagihan",
+    "utilities":                  "tagihan",
+    "bills & utilities":          "tagihan",
+    "bill payment":               "tagihan",
+    "entertainment":              "hiburan",
+    "entertainment & leisure":    "hiburan",
+    "leisure":                    "hiburan",
+    "health":                     "kesehatan",
+    "healthcare":                 "kesehatan",
+    "health & beauty":            "kesehatan",
+    "wellness":                   "kesehatan",
+    "education":                  "pendidikan",
+    "other":                      "lainnya",
+    "others":                     "lainnya",
+    "uncategorized":              "lainnya",
+    # Indonesian labels — exact form (as shown on-screen)
+    "belanja":                    "belanja",
+    "belanja & retail":           "belanja",
+    "belanja dan retail":         "belanja",
+    "makanan":                    "makanan_minuman",
+    "makan & minum":              "makanan_minuman",
+    "makanan & minuman":          "makanan_minuman",
+    "makanan dan minuman":        "makanan_minuman",
+    "transportasi":               "transportasi",
+    "tagihan":                    "tagihan",
+    "tagihan & utilitas":         "tagihan",
+    "tagihan dan utilitas":       "tagihan",
+    "hiburan":                    "hiburan",
+    "hiburan & wisata":           "hiburan",
+    "hiburan dan wisata":         "hiburan",
+    "kesehatan":                  "kesehatan",
+    "pendidikan":                 "pendidikan",
+    "lainnya":                    "lainnya",
 }
 
 
@@ -1151,6 +1196,12 @@ class MBankingParser:
                     logger.debug("_parse_recipient QR-ke pattern: %r", clean)
                     return clean
             m = re.search(r"payment\s+to\s+(.+)", line, re.IGNORECASE)
+            if m:
+                clean = good_candidate(m.group(1).strip())
+                if clean:
+                    return clean
+            # "Transfer ke GoFood Indonesia PT" / "Kirim ke ..." same-line pattern
+            m = re.search(r"(?:transfer|kirim(?:\s+uang)?)\s+ke\s+([A-Za-z][A-Za-z0-9\s&.,'\-]{2,})", line, re.IGNORECASE)
             if m:
                 clean = good_candidate(m.group(1).strip())
                 if clean:
