@@ -4,7 +4,7 @@ import Header from "../components/Header.jsx";
 import MetricCard from "../components/MetricCard.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import TransactionTable from "../components/TransactionTable.jsx";
-import { deleteTransactions, getTransactions } from "../api/client.js";
+import { deleteTransactionById, deleteTransactions, getTransactions, updateTransactionCategory } from "../api/client.js";
 import { categories, metricTone } from "../styles/theme.js";
 
 const SOURCE_OPTIONS = [
@@ -54,6 +54,27 @@ export default function History({ onNavigate }) {
 
   const total = transactions.reduce((sum, item) => sum + (item.amount || 0), 0);
   const average = transactions.length ? total / transactions.length : 0;
+
+  const handleDeleteOne = async (id) => {
+    try {
+      await deleteTransactionById(id);
+      setTransactions((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleUpdateCategory = async (id, category) => {
+    try {
+      const updated = await updateTransactionCategory(id, category);
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, category: updated.category, category_display: updated.category_display } : t))
+      );
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -175,7 +196,7 @@ export default function History({ onNavigate }) {
                   <div style={{ color: "var(--color-muted)", fontSize: 14 }}>Daftar transaksi yang sudah disimpan.</div>
                 </div>
               </div>
-              <TransactionTable transactions={filtered} showSavedAt />
+              <TransactionTable transactions={filtered} showSavedAt onDeleteOne={handleDeleteOne} onUpdateCategory={handleUpdateCategory} />
             </div>
 
             <div className="flex justify-end">
